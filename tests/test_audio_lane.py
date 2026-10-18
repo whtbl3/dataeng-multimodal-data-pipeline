@@ -14,8 +14,9 @@ PROVENANCE = {
     "source_hash": "sha256:fixture",
     "code_version": "test",
     "run_id": "run-test",
-    "processed_at": datetime(2026, 10, 17, 12, 0, 0),    # cố định, KHÔNG dùng now()
+    "processed_at": datetime(2026, 10, 17, 12, 0, 0),  # cố định, KHÔNG dùng now()
 }
+
 
 def test_build_rows_runs_on_fixture():
     fixture = json.loads(FIXTURE.read_text())
@@ -33,9 +34,18 @@ def test_build_rows_runs_on_fixture():
     assert json.loads(rows[0]["raw_payload"]) == fixture["segments"][0]
     assert fixture["segments"][0]["text"].startswith(" ")
     assert not rows[0]["text"].startswith(" ")
-    assert set(rows[0]) == {"video_id", "segment_id", "modality", "text", "t_start", "t_end",
-                        "quality_score", "quality_flag", "raw_payload", "provenance"}
-
+    assert set(rows[0]) == {
+        "video_id",
+        "segment_id",
+        "modality",
+        "text",
+        "t_start",
+        "t_end",
+        "quality_score",
+        "quality_flag",
+        "raw_payload",
+        "provenance",
+    }
 
 
 def test_segment_id_uses_round_not_int():
@@ -58,13 +68,12 @@ def test_quality_score_formula():
 def test_quality_flag_threshold():
     assert quality_flag(0.12) == "quarantine"  # nhạc nền: điểm thấp
     assert quality_flag(0.29) == "quarantine"  # ngay dưới ngưỡng
-    assert (
-        quality_flag(0.3) == "ok"
-    )
+    assert quality_flag(0.3) == "ok"
     assert quality_flag(0.8) == "ok"
+
 
 def test_running_twice_gives_the_same_rows():
     fixture = json.loads(FIXTURE.read_text())
-    first  = build_rows(fixture["video_id"], fixture["segments"], PROVENANCE)
+    first = build_rows(fixture["video_id"], fixture["segments"], PROVENANCE)
     second = build_rows(fixture["video_id"], fixture["segments"], PROVENANCE)
     assert first == second

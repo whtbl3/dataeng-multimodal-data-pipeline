@@ -1,4 +1,7 @@
 """DuckDB storage: schema, write strategies and Parquet export (spec §4). Roadmap #1."""
+
+from pathlib import Path
+
 import duckdb
 
 
@@ -30,10 +33,12 @@ def create_schema(conn: duckdb.DuckDBPyConnection):
     """
     conn.execute(audio_segment_table)
 
+
 def connect(db_path) -> duckdb.DuckDBPyConnection:
     conn: duckdb.DuckDBPyConnection = duckdb.connect(str(db_path))
     create_schema(conn)
     return conn
+
 
 def insert_rows(conn: duckdb.DuckDBPyConnection, table: str, rows: list[dict]) -> None:
     cols = list(rows[0])
@@ -41,7 +46,10 @@ def insert_rows(conn: duckdb.DuckDBPyConnection, table: str, rows: list[dict]) -
     values = [[r[c] for c in cols] for r in rows]
     conn.executemany(sql, values)
 
-def overwrite_video(conn: duckdb.DuckDBPyConnection, table: str, video_id: str, rows: list[dict]) -> None:
+
+def overwrite_video(
+    conn: duckdb.DuckDBPyConnection, table: str, video_id: str, rows: list[dict]
+) -> None:
     conn.begin()
     try:
         conn.execute(f"DELETE FROM {table} WHERE video_id = ?", [video_id])
@@ -50,3 +58,20 @@ def overwrite_video(conn: duckdb.DuckDBPyConnection, table: str, video_id: str, 
     except Exception:
         conn.rollback()
         raise
+
+
+def export_parquet(
+    conn: duckdb.DuckDBPyConnection, video_id: str, out_dir: Path | None = None
+) -> Path:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / "audio_segments.parquet"
+    # table = conn.execute(
+    #     "SELECT * FROM audio_segments WHERE video_id = ? ORDER BY segment_id", video_id
+    # ).to_arrow_table(table, path)
+    path = out_dir / "audio_segments.parquet"
+    conn.execute(
+        f"COPY (SELECT * FROM audio_segments WHERE video_id = ? ORDER BY segment_id) "
+        f"TO '{path}' (FORMAT parquet)",
+        [video_id],
+    )
+    return path

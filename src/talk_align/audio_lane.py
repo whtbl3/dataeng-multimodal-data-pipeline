@@ -48,15 +48,15 @@ def transcribe(video_path: Path, params: AudioParams) -> tuple[list[dict], float
     duration = float(result_duration.stdout.strip())
 
     model = WhisperModel(
-        model_size_or_path=params.model, 
+        model_size_or_path=params.model,
         device=params.device,
-        compute_type=params.compute_type
+        compute_type=params.compute_type,
     )
 
     segments_generator, _ = model.transcribe(
         str(audio_path),
-        beam_size=params.beam_size, 
-        language=params.language, 
+        beam_size=params.beam_size,
+        language=params.language,
         temperature=params.temperature,
     )
 

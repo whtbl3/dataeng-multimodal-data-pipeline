@@ -11,11 +11,13 @@ DATA_DIR = BASE_DIR / "data"
 INPUT_DIR = DATA_DIR / "input"
 WORK_DIR = DATA_DIR / "work"
 DB_PATH = DATA_DIR / "lab1.duckdb"
+OUT_DIR = DATA_DIR / "out"
 
 # Automatically create the directory if it does not yet exist
 WORK_DIR.mkdir(parents=True, exist_ok=True)
 
 QUARANTINE_THRESHOLD = 0.3
+
 
 @dataclass(frozen=True)
 class AudioParams:

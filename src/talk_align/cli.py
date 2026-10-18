@@ -14,7 +14,7 @@ import duckdb
 
 from talk_align import store
 from talk_align.audio_lane import build_rows, transcribe
-from talk_align.config import BASE_DIR, DB_PATH, AudioParams
+from talk_align.config import BASE_DIR, DB_PATH, OUT_DIR, AudioParams
 
 # def save_fixture_temp(video_id: str, raw_segments: list[dict], duration: float):
 #     fixture_dir =Path("tests/fixtures")
@@ -31,18 +31,15 @@ from talk_align.config import BASE_DIR, DB_PATH, AudioParams
 #         json.dump(data, f, ensure_ascii=False, indent=2)
 #     print(f"Saved temp fixture at {fixture_file}")
 
+
 def file_sha256(video_path: Path) -> str:
     with video_path.open("rb") as f:
         digest = hashlib.file_digest(f, "sha256")
     return f"sha256:{digest.hexdigest()}"
 
+
 def git_code_version() -> str:
-    cmd_commit = [
-        "git",
-        "rev-parse",
-        "--short",
-        "HEAD"
-    ]
+    cmd_commit = ["git", "rev-parse", "--short", "HEAD"]
     commit = subprocess.run(
         cmd_commit,
         cwd=BASE_DIR,
@@ -51,12 +48,7 @@ def git_code_version() -> str:
         text=True,
     ).stdout.strip()
 
-    cmd_list_changes = [
-        "git",
-        "status",
-        "--porcelain",
-        "."
-    ]
+    cmd_list_changes = ["git", "status", "--porcelain", "."]
     changes = subprocess.run(
         cmd_list_changes,
         cwd=BASE_DIR,
@@ -64,8 +56,9 @@ def git_code_version() -> str:
         capture_output=True,
         text=True,
     ).stdout.strip()
-    
+
     return f"{commit}-dirty" if changes else commit
+
 
 def build_provenance(video_path: Path, params: AudioParams) -> dict:
     provenance = {
@@ -75,9 +68,10 @@ def build_provenance(video_path: Path, params: AudioParams) -> dict:
         "source_hash": file_sha256(video_path),
         "run_id": str(uuid.uuid4()),
         "code_version": git_code_version(),
-        "processed_at": datetime.now()
+        "processed_at": datetime.now(),
     }
     return provenance
+
 
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="talk-align", description="Talk Align CLI")
@@ -88,28 +82,52 @@ def main(argv=None):
     # Subcommand: Audio
     audio_parser = subparser.add_parser("audio", help="Process audio from video")
     audio_parser.add_argument("video", type=Path, help="Path to input video file")
-
-    # save_fixture_temp(video_id=video_id, raw_segments=raw_segments, duration=duration)
+    # Subcommand: Export
+    export_parser = subparser.add_parser(
+        "export", help="Export processed data as parquet file"
+    )
+    export_parser.add_argument("video_id", help="ID of the video to export")
+    export_parser.add_argument(
+        "-o", "--out", type=Path, help="Output directory or file path"
+    )
 
     args = parser.parse_args(argv)
-    video_path: Path = args.video
-    video_id: str = video_path.stem
-    
-    params = AudioParams()
-    provenance = build_provenance(video_path, params)
-    
-    raw_segments, _duration = transcribe(video_path, AudioParams())
+    if args.command == "audio":
+        # save_fixture_temp(video_id=video_id, raw_segments=raw_segments, duration=duration)
+        video_path: Path = args.video
+        if not video_path.exists():  # ← thêm 2 dòng này
+            parser.error(f"File not exist: {video_path}")
+        video_id: str = video_path.stem
 
-    rows = build_rows(video_id, raw_segments, provenance)
+        params = AudioParams()
+        provenance = build_provenance(video_path, params)
 
-    conn: duckdb.DuckDBPyConnection = store.connect(db_path=DB_PATH)
-    # store.insert_rows(conn, "audio_segments", rows)
-    store.overwrite_video(conn, table="audio_segments", video_id=video_id, rows=rows)
-    conn.close()
+        raw_segments, _duration = transcribe(video_path, params)
 
-    # print(len(rows), rows[0]["segment_id"], rows[0]["provenance"]["run_id"])
+        rows = build_rows(video_id, raw_segments, provenance)
+
+        conn: duckdb.DuckDBPyConnection = store.connect(db_path=DB_PATH)
+        # store.insert_rows(conn, "audio_segments", rows)
+        store.overwrite_video(
+            conn, table="audio_segments", video_id=video_id, rows=rows
+        )
+        conn.close()
+
+        # print(len(rows), rows[0]["segment_id"], rows[0]["provenance"]["run_id"])
+    elif args.command == "export":
+        conn = store.connect(db_path=DB_PATH)
+        video_id = args.video_id
+        run_id = conn.execute(
+            "SELECT any_value(provenance.run_id) FROM audio_segments WHERE video_id = ?",
+            [video_id],
+        ).fetchone()[0]
+        if run_id is None:
+            parser.error(f"No rows for video_id: {video_id}")
+        out_dir = args.out or OUT_DIR / run_id
+        output_path = store.export_parquet(conn, video_id, out_dir)
+        conn.close()
+        print(output_path)
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())
