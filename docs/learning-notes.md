@@ -240,17 +240,91 @@ hai cột đổi theo lần chạy.
 - Repo trong WSL: bỏ đường dẫn `D:\` và winget; ffmpeg cài bằng apt; video nằm trong
   `data/input/` (gitignored).
 - `segments` của faster-whisper là generator: model chỉ chạy khi lặp qua nó.
-- `transcribe()` chưa nhận `video_id` trong khi `TODO(4)` cần nó: tác giả chọn cách xử lý.
+- `transcribe()` không nhận `video_id`: tác giả chọn suy ra từ `video_path.stem` để đặt
+  thư mục `data/work/<stem>/`. Hệ quả: nếu sau này có `--video-id` khác tên file, wav vẫn
+  nằm theo tên file.
+
+## 11. Bài học khi làm roadmap #1 (2026-10-18)
+
+Những điều tự phát hiện khi chạy thật, không có trong spec lúc đầu.
+
+### Whisper
+- **`avg_logprob` và `no_speech_prob` tính theo cửa sổ ~30 s (`seek`), không theo câu.**
+  Các câu cùng `seek` có cùng hai giá trị này, nên `quality_score` giống nhau cả nhóm:
+  ```
+  id  seek  start  avg_logprob          quality_score
+  1   0     0.0    -0.12359793012340864  0.799
+  2   0     5.0    -0.12359793012340864  0.799   ← giống câu 1
+  4   0     20.0   -0.12359793012340864  0.799
+  5   2700  27.0   -0.04130014218389988  0.959   ← seek khác → điểm khác
+  ```
+  Câu nghe nhầm ("asset transactions" thay vì "ACID transactions", 261 s) không có điểm
+  thấp riêng. Hướng sửa sau: `word_timestamps=True`, dùng `probability` của từng từ.
+- **Mốc thời gian của `lakehouse.mp4` toàn tròn giây** (0.0, 5.0, 13.0...), nên mọi
+  `segment_id` kết thúc bằng `000`. Ảnh hưởng độ chính xác khi align (roadmap #5).
+- 78 segment; câu cuối kết thúc 341.0 s trong khi `duration` 344.561 s → `duration` phải
+  lấy từ ffprobe của video gốc. Wav sau khi chuyển đổi còn lệch nhẹ (344.560938).
+- **`faster-whisper 1.2.1` + `av 19` → `TypeError: open() got an unexpected keyword
+  argument 'metadata_errors'`.** `faster-whisper` chỉ ghi `av>=11`; đã thử 15–18 đều chạy.
+  Khóa `av<19` trong `pyproject.toml`.
+- `Segment` là dataclass: dùng `dataclasses.asdict(seg)`; `seg._asdict()` đã deprecated.
+
+### Python
+- **float để tính, số nguyên làm id.** `16.15` thật ra là `16.1499999...`:
+  ```
+  int(16.15 * 1000)   → 16149   ✗ (cắt)
+  round(16.15 * 1000) → 16150   ✓ (làm tròn)
+  f"{16.15 * 1000}"   → "16149.999999999998"   ✗ (float trong id)
+  ```
+  So float trong test bằng `pytest.approx`, không dùng `==`.
+- Fixture tròn giây không bắt được lỗi `int`: cần test riêng với `start = 16.15`.
+- `Path(__file__).resolve().parents[2]` = gốc project khi file nằm ở
+  `src/talk_align/config.py`. `.parent` chỉ lên 1 cấp → từng ghi wav vào `src/`.
+- **Không `mkdir` trong `config.py`:** nó tạo cả thư mục sai (`data/data/work`) lúc import
+  nên che lỗi đường dẫn. Tạo thư mục ở hàm cần ghi file.
+- argparse: tham số tùy chọn có `default=` thì không bao giờ là `None`; nhánh
+  `if args.out is None` từng không bao giờ chạy.
+
+### Kiến trúc
+- `build_rows` là hàm thuần: `provenance` (có `run_id`, `processed_at`, sha256, git) tạo
+  một lần ở CLI rồi truyền vào. Test chạy 0.15 s và chạy 2 lần ra giống hệt.
+- Tham số model gom vào `AudioParams` (frozen dataclass) dùng chung cho `transcribe` và
+  `provenance.params`, để hai nơi không lệch nhau.
+- `code_version`: `git status --porcelain .` với `cwd=BASE_DIR`; dấu `.` để repo cha
+  (`/home/dev/projects`) có thay đổi ở project khác không làm `talk-align` thành `-dirty`.
+- `store.connect(db_path)` phải dùng tham số, không dùng `DB_PATH`: từng làm test ghi vào
+  `data/lab1.duckdb` thật. CLI mới là nơi chọn `DB_PATH`.
+- DuckDB chỉ cho một tiến trình ghi: mở connection ngay trước khi ghi, không mở trước khi
+  chạy Whisper vài phút.
+- Ghi lại một video, đã thử:
+  ```
+  không PK, chạy 2 lần         → 6 dòng (trùng, không lỗi)
+  có PK, chạy 2 lần            → ConstraintException: Duplicate key
+  có PK, small rồi base        → 4 dòng, không lỗi (zombie)
+  DELETE + INSERT trong 1 tx   → đúng dòng mới; INSERT lỗi thì rollback, giữ dòng cũ
+  ```
+- CLI chưa có test: thiếu `video_id` khi gọi `overwrite_video` chỉ lộ ra sau khi Whisper
+  chạy xong. Ứng viên cho test sau (mock `transcribe`).
+
+### Cách làm
+- **Outside-in:** bắt đầu từ lệnh CLI, viết vỏ hàm `raise NotImplementedError`, chạy để
+  lỗi chỉ chỗ tiếp theo. Lệnh ngoài (ffmpeg, ffprobe, git) chạy bằng tay trước rồi mới đưa
+  vào `subprocess.run(..., check=True)`.
+- Bước chậm (Whisper) chạy một lần, lưu `tests/fixtures/whisper_lakehouse.json` (5 câu);
+  từ đó `build_rows` phát triển bằng pytest.
+- Fixture nằm ở `tests/` (commit, test chạy được ở mọi máy), không ở `data/`.
 
 ## Câu hỏi tự kiểm tra
 
 | Câu hỏi | Test kiểm tra |
 |---|---|
-| Vì sao `segment_id` không dùng `id` của Whisper, và vì sao `round`? | `test_segment_id_is_deterministic_milliseconds_not_whisper_id` |
-| `quality_score` tính từ hai trường nào? | `test_quality_score_is_exp_logprob_times_speech_prob` |
-| Vì sao rerun cả video phải DELETE + INSERT? | `test_whole_video_rerun_leaves_only_the_new_rows` |
-| Crash giữa DELETE và INSERT thì sao? | `test_failed_insert_after_delete_keeps_the_old_rows` |
-| Replay 2 lần ra mấy dòng? | `test_replaying_twice_gives_one_row_with_the_latest_values` |
+| Vì sao `segment_id` không dùng `id` của Whisper, và vì sao `round`? | `test_segment_id_uses_round_not_int` |
+| `quality_score` tính từ hai trường nào? Ngưỡng 0.3 là `<` hay `<=`? | `test_quality_score_formula`, `test_quality_flag_threshold` |
+| Vì sao `build_rows` không được gọi `datetime.now()`? | `test_running_twice_gives_the_same_rows` |
+| INSERT 2 lần vào bảng có PRIMARY KEY thì sao? | `test_insert_twice_fails` |
+| Vì sao rerun cả video phải DELETE + INSERT? | `test_rerun_removes_zombies_and_keeps_other_videos` |
+| Crash giữa DELETE và INSERT thì sao? | `test_failed_insert_keeps_old_rows` |
+| Replay 2 lần ra mấy dòng? | (roadmap #7) |
 | Slide 0.4 s do chuyển cảnh xử lý ra sao, vì sao không vào DLQ? | (roadmap #3) |
 | Slide không có chữ vào đâu, vì sao không vào DLQ? | (roadmap #4) |
 | Có dòng `nearest` trong `aligned` nghĩa là gì? | (roadmap #5) |

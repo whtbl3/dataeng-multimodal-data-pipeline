@@ -13,7 +13,7 @@ engineering: tác giả tự viết code pipeline, spec này là khung.
 DuckDB; run report; replay DLQ; kiểm tra idempotency.
 
 **Out:** streaming, incremental ingestion, embedding, vector search, LLM, UI, cloud,
-nhiều video một lần chạy, CI (để sau).
+nhiều video một lần chạy, CI/CD (không làm; mọi kiểm tra chạy local).
 
 ## 3. Architecture (box level)
 ```
@@ -200,3 +200,6 @@ data/out/<run_id>/            *.parquet + report.md
 | Join chỉ lọc quarantine phía audio; `aligned.slide_quality_flag` để người dùng tự lọc | Final | §4 `aligned` |
 | DLQ chỉ chứa lỗi xử lý; chất lượng kém → `quality_flag` | Final | docs/intent.md |
 | Whisper `small`, CPU int8, `temperature=0`, `language="en"` | Final | docs/tech-stack.md |
+| Không làm CI/CD; `pytest` + `ruff` chạy local trước khi commit | Final | roadmap #10 |
+| Khóa `av<19`: av 19 bỏ `metadata_errors` mà faster-whisper 1.2.1 dùng | Final | docs/learning-notes.md §11 |
+| `quality_score` audio hiện chung theo cửa sổ Whisper (`seek`), chưa theo câu; xem lại khi làm `word_timestamps` | Open | docs/learning-notes.md §11 |
