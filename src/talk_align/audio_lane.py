@@ -5,9 +5,9 @@ from dataclasses import asdict
 from pathlib import Path
 
 from faster_whisper import WhisperModel
-
-from talk_align.config import QUARANTINE_THRESHOLD, SILENCE_THRESHOLD, WORK_DIR, AudioParams
-
+from pydantic import ValidationError
+from talk_align.config import QUARANTINE_THRESHOLD, SILENCE_THRESHOLD, TIME_TOLERANCE_S, WORK_DIR, AudioParams
+from talk_align.contract import AudioSegmentRow, reason_code_for, make_error_detail
 
 def transcribe(video_path: Path, params: AudioParams) -> tuple[list[dict], float]:
     work_dir = WORK_DIR / video_path.stem
@@ -99,7 +99,7 @@ def make_dlq_row(video_id, item, reason_code, error_detail, provenance) -> dict:
 def build_rows(video_id: str, raw_segments: list[dict], duration: float, provenance: dict) -> tuple[list[dict], list[dict], dict]:
     ok_rows = []
     dlq_rows = []
-    metrics = {"segments_in": len(raw_segments), "dropped_silence": 0}
+    metrics = {"segments_in": len(raw_segments), "dropped_silence": 0, "clipped_t_end": 0}
     for item in raw_segments:
         if item["text"].strip() == "" and item["no_speech_prob"] >= SILENCE_THRESHOLD:
             metrics["dropped_silence"] += 1
@@ -113,6 +113,35 @@ def build_rows(video_id: str, raw_segments: list[dict], duration: float, provena
                 provenance
             ))
             continue
+        if item["start"] >= item["end"]:
+            dlq_rows.append(make_dlq_row(
+                video_id,
+                item,
+                "INVALID_TIME_RANGE",
+                f"{item['start']} >= {item["end"]}",
+                provenance
+            ))
+            continue
+        if item["start"] >= duration:
+            dlq_rows.append(make_dlq_row(
+                video_id, item, "TIME_OUT_OF_BOUNDS",
+                f"t_start={item['start']} >= duration={duration}",
+                provenance,
+            ))
+            continue
+        t_end = item["end"]
+        overshoot = t_end - duration                 # vượt bao nhiêu giây (âm = không vượt)
+        if overshoot > TIME_TOLERANCE_S:             # vượt quá nhiều → DLQ
+            dlq_rows.append(make_dlq_row(
+                video_id, item, "TIME_OUT_OF_BOUNDS",
+                f"t_end={t_end} exceeds duration={duration} by {overshoot:.3f}s > {TIME_TOLERANCE_S}s",
+                provenance,
+            ))
+            continue
+
+        if overshoot > 0:                            # vượt một chút → cắt, đếm
+            t_end = duration
+            metrics["clipped_t_end"] += 1
         score = quality_score(item)
         segment = {
             "raw_payload": json.dumps(item, ensure_ascii=False),
@@ -120,11 +149,24 @@ def build_rows(video_id: str, raw_segments: list[dict], duration: float, provena
             "modality": "audio",
             "text": item["text"].strip(),
             "t_start": item["start"],
-            "t_end": item["end"],
+            "t_end": t_end,
             "segment_id": make_segment_id(video_id, item["start"]),
             "quality_score": score,
             "quality_flag": quality_flag(score),
             "provenance": provenance,
         }
+        try:
+            AudioSegmentRow.model_validate(segment)
+        except ValidationError as e:
+            dlq_rows.append(
+                make_dlq_row(
+                    video_id,
+                    item,
+                    reason_code_for(e),
+                    make_error_detail(e),
+                    provenance
+                )
+            )
+            continue
         ok_rows.append(segment)
     return ok_rows, dlq_rows, metrics

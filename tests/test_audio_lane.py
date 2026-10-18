@@ -122,3 +122,36 @@ def test_dlq_row_has_the_eleven_columns():
     _, dlq, _ = build_rows("v", [make_seg(text="", no_speech_prob=0.1)], 600.0, PROVENANCE)
     assert set(dlq[0]) == {"dlq_id", "video_id", "record_id", "stage", "reason_code", "error_detail",
                            "raw_payload", "provenance", "failed_at", "attempts", "status"}
+
+def test_end_before_start_goes_to_dlq():
+    _, dlq, _ = build_rows("v", [make_seg(start=20.0, end=19.5)], 600.0, PROVENANCE)
+    assert dlq[0]["reason_code"] == "INVALID_TIME_RANGE"
+
+def test_zero_length_goes_to_dlq():
+    _, dlq, _ = build_rows("v", [make_seg(start=5.0, end=5.0)], 600.0, PROVENANCE)
+    assert len(dlq) == 1
+
+def test_small_overrun_is_clipped():
+    seg = make_seg(start=340.0, end=345.2)
+    ok, dlq, m = build_rows("v", [seg], 344.561, PROVENANCE)
+    assert ok[0]["t_end"] == 344.561
+    assert m["clipped_t_end"] == 1
+    assert json.loads(ok[0]["raw_payload"])["end"] == 345.2      # bản gốc không bị sửa
+
+def test_overrun_at_tolerance_is_still_clipped():
+    ok, _, _ = build_rows("v", [make_seg(start=340.0, end=345.561)], 344.561, PROVENANCE)
+    assert len(ok) == 1
+
+def test_large_overrun_goes_to_dlq():
+    ok, dlq, _ = build_rows("v", [make_seg(start=340.0, end=346.0)], 344.561, PROVENANCE)
+    assert ok == [] and dlq[0]["reason_code"] == "TIME_OUT_OF_BOUNDS"
+
+def test_segment_starting_after_video_end_goes_to_dlq():
+    ok, dlq, _ = build_rows("v", [make_seg(start=344.8, end=345.0)], 344.561, PROVENANCE)
+    assert ok == []
+    assert dlq[0]["reason_code"] == "TIME_OUT_OF_BOUNDS"
+
+def test_positive_logprob_gives_score_out_of_range():
+    ok, dlq, _ = build_rows("v", [make_seg(avg_logprob=0.5)], 600.0, PROVENANCE)
+    assert ok == []
+    assert dlq[0]["reason_code"] == "SCORE_OUT_OF_RANGE"

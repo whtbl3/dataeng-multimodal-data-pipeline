@@ -29,3 +29,4 @@ class AudioParams:
     temperature: float = 0.0
 
 SILENCE_THRESHOLD = 0.6
+TIME_TOLERANCE_S = 1.0
