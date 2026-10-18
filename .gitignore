@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.env
+.vscode
+
+# videos, models, database and outputs stay local (spec §6 Privacy)
+data/**
+!data/*/
+!data/*/.gitkeep

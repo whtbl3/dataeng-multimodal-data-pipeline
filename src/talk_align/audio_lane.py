@@ -1,0 +1,96 @@
+import json
+import math
+import subprocess
+from dataclasses import asdict
+from pathlib import Path
+
+from faster_whisper import WhisperModel
+
+from talk_align.config import QUARANTINE_THRESHOLD, WORK_DIR, AudioParams
+
+
+def transcribe(video_path: Path, params: AudioParams) -> tuple[list[dict], float]:
+    work_dir = WORK_DIR / video_path.stem
+    work_dir.mkdir(parents=True, exist_ok=True)
+    audio_path = work_dir / "audio.wav"
+
+    if not audio_path.exists():
+        cmd_make_wav = [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            str(video_path),
+            "-vn",
+            "-ar",
+            "16000",
+            "-ac",
+            "1",
+            str(audio_path),
+        ]
+        subprocess.run(cmd_make_wav, check=True)
+
+    cmd_get_duration = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        str(video_path),
+    ]
+    result_duration = subprocess.run(
+        cmd_get_duration, check=True, capture_output=True, text=True
+    )
+    duration = float(result_duration.stdout.strip())
+
+    model = WhisperModel(
+        model_size_or_path=params.model, 
+        device=params.device,
+        compute_type=params.compute_type
+    )
+
+    segments_generator, _ = model.transcribe(
+        str(audio_path),
+        beam_size=params.beam_size, 
+        language=params.language, 
+        temperature=params.temperature,
+    )
+
+    raw_segments = [asdict(s) for s in segments_generator]
+
+    return raw_segments, duration
+
+
+def quality_score(seg) -> float:
+    # seg["avg_logprob"]: độ tự tin của Whisper về chữ nó nghe ra. Giá trị âm, càng gần 0 càng tự tin. exp() đổi nó về khoảng 0 đến 1.
+    # 1 - seg["no_speech_prob"]: xác suất đoạn này có tiếng người nói.
+    return math.exp(seg["avg_logprob"]) * (1 - seg["no_speech_prob"])
+
+
+def quality_flag(score) -> str:
+    label = "ok" if score >= QUARANTINE_THRESHOLD else "quarantine"
+    return label
+
+
+def build_rows(video_id: str, raw_segments: list[dict], provenance: dict) -> list[dict]:
+    segments = []
+    for item in raw_segments:
+        score = quality_score(item)
+        segment = {
+            "raw_payload": json.dumps(item, ensure_ascii=False),
+            "video_id": video_id,
+            "modality": "audio",
+            "text": item["text"].strip(),
+            "t_start": item["start"],
+            "t_end": item["end"],
+            "segment_id": f"{video_id}_a_{round(item['start'] * 1000):08d}",
+            "quality_score": score,
+            "quality_flag": quality_flag(score),
+            "provenance": provenance,
+        }
+        segments.append(segment)
+    return segments
