@@ -102,9 +102,9 @@ def main(argv=None):
         params = AudioParams()
         provenance = build_provenance(video_path, params)
 
-        raw_segments, _duration = transcribe(video_path, params)
+        raw_segments, duration = transcribe(video_path, params)
 
-        rows = build_rows(video_id, raw_segments, provenance)
+        rows, _dlq, _metrics = build_rows(video_id, raw_segments, provenance)
 
         conn: duckdb.DuckDBPyConnection = store.connect(db_path=DB_PATH)
         # store.insert_rows(conn, "audio_segments", rows)

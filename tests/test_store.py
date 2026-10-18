@@ -22,29 +22,28 @@ def test_schema_has_the_ten_audio_columns():
         "avg_logprob": -0.2,
         "no_speech_prob": 0.01,
     }
-    rows = build_rows("x", [seg], PROVENANCE)
+    ok_rows, _dlq, _metrics = build_rows("x", [seg], 600.0, PROVENANCE)
     con.close()
-    assert cols == set(rows[0])
+    assert cols == set(ok_rows[0])
 
 
 def test_insert_writes_all_rows():
     fixture = json.loads(FIXTURE.read_text())
     con = store.connect(":memory:")
-    rows = build_rows("lakehouse", fixture["segments"], PROVENANCE)
-    store.insert_rows(con, "audio_segments", rows)
+    ok_rows, _dlq, _metrics = build_rows("lakehouse", fixture["segments"], fixture["duration"], PROVENANCE)
+    store.insert_rows(con, "audio_segments", ok_rows)
     count = con.execute("SELECT count(*) FROM audio_segments").fetchone()[0]
     con.close()
-    assert count == len(rows)
+    assert count == len(ok_rows)
 
 
 def test_insert_twice_fails():
     fixture = json.loads(FIXTURE.read_text())
     con = store.connect(":memory:")
-    rows = build_rows("lakehouse", fixture["segments"], PROVENANCE)
-    store.insert_rows(con, "audio_segments", rows)
+    ok_rows, _dlq, _metrics = build_rows("lakehouse", fixture["segments"], fixture["duration"], PROVENANCE)
+    store.insert_rows(con, "audio_segments", ok_rows)
     with pytest.raises(duckdb.ConstraintException):
-        store.insert_rows(con, "audio_segments", rows)
-    con.close()
+        store.insert_rows(con, "audio_segments", ok_rows)
 
 
 # Simulator rows
@@ -59,7 +58,8 @@ def rows_at(video_id, starts):
         }
         for s in starts
     ]
-    return build_rows(video_id, segs, PROVENANCE)
+    ok_rows, _dlq, _metrics = build_rows(video_id, segs, 600.0, PROVENANCE)
+    return ok_rows
 
 
 def ids(con, video_id):

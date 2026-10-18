@@ -27,3 +27,5 @@ class AudioParams:
     beam_size: int = 5
     language: str = "en"
     temperature: float = 0.0
+
+SILENCE_THRESHOLD = 0.6

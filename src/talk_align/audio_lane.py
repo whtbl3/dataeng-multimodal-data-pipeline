@@ -6,7 +6,7 @@ from pathlib import Path
 
 from faster_whisper import WhisperModel
 
-from talk_align.config import QUARANTINE_THRESHOLD, WORK_DIR, AudioParams
+from talk_align.config import QUARANTINE_THRESHOLD, SILENCE_THRESHOLD, WORK_DIR, AudioParams
 
 
 def transcribe(video_path: Path, params: AudioParams) -> tuple[list[dict], float]:
@@ -75,10 +75,44 @@ def quality_flag(score) -> str:
     label = "ok" if score >= QUARANTINE_THRESHOLD else "quarantine"
     return label
 
+def make_segment_id(video_id: str, start: float) -> str:
+    return f"{video_id}_a_{round(start * 1000):08d}"
 
-def build_rows(video_id: str, raw_segments: list[dict], provenance: dict) -> list[dict]:
-    segments = []
+def make_dlq_row(video_id, item, reason_code, error_detail, provenance) -> dict:
+    record_id = make_segment_id(video_id, item["start"])
+    dlq_dict = {
+        "dlq_id": f"dlq_validate_{record_id}",
+        "video_id": video_id,
+        "record_id": record_id,
+        "stage": "validate",
+        "reason_code": reason_code,
+        "error_detail": error_detail,
+        "raw_payload": json.dumps(item, ensure_ascii=False),
+        "provenance": provenance,
+        "failed_at": provenance["processed_at"],
+        "attempts": 0,
+        "status": "open"
+    }
+    return dlq_dict
+
+
+def build_rows(video_id: str, raw_segments: list[dict], duration: float, provenance: dict) -> tuple[list[dict], list[dict], dict]:
+    ok_rows = []
+    dlq_rows = []
+    metrics = {"segments_in": len(raw_segments), "dropped_silence": 0}
     for item in raw_segments:
+        if item["text"].strip() == "" and item["no_speech_prob"] >= SILENCE_THRESHOLD:
+            metrics["dropped_silence"] += 1
+            continue
+        if item["text"].strip() == "":
+            dlq_rows.append(make_dlq_row(
+                video_id,
+                item,
+                "EMPTY_TEXT",
+                f"text is empty but no_speech_prob={item['no_speech_prob']:.2f} < {SILENCE_THRESHOLD}",
+                provenance
+            ))
+            continue
         score = quality_score(item)
         segment = {
             "raw_payload": json.dumps(item, ensure_ascii=False),
@@ -87,10 +121,10 @@ def build_rows(video_id: str, raw_segments: list[dict], provenance: dict) -> lis
             "text": item["text"].strip(),
             "t_start": item["start"],
             "t_end": item["end"],
-            "segment_id": f"{video_id}_a_{round(item['start'] * 1000):08d}",
+            "segment_id": make_segment_id(video_id, item["start"]),
             "quality_score": score,
             "quality_flag": quality_flag(score),
             "provenance": provenance,
         }
-        segments.append(segment)
-    return segments
+        ok_rows.append(segment)
+    return ok_rows, dlq_rows, metrics

@@ -20,21 +20,20 @@ PROVENANCE = {
 
 def test_build_rows_runs_on_fixture():
     fixture = json.loads(FIXTURE.read_text())
-    rows = build_rows(fixture["video_id"], fixture["segments"], PROVENANCE)
-    print(rows[0])
-    assert [r["segment_id"] for r in rows] == [
+    ok_rows, _dlq, _metrics = build_rows(fixture["video_id"], fixture["segments"], fixture["duration"], PROVENANCE)
+    assert [r["segment_id"] for r in ok_rows] == [
         "lakehouse_a_00000000",
         "lakehouse_a_00005000",
         "lakehouse_a_00013000",
         "lakehouse_a_00020000",
         "lakehouse_a_00027000",
     ]
-    assert {r["quality_flag"] for r in rows} == {"ok"}
-    assert isinstance(rows[0]["raw_payload"], str)
-    assert json.loads(rows[0]["raw_payload"]) == fixture["segments"][0]
+    assert {r["quality_flag"] for r in ok_rows} == {"ok"}
+    assert isinstance(ok_rows[0]["raw_payload"], str)
+    assert json.loads(ok_rows[0]["raw_payload"]) == fixture["segments"][0]
     assert fixture["segments"][0]["text"].startswith(" ")
-    assert not rows[0]["text"].startswith(" ")
-    assert set(rows[0]) == {
+    assert not ok_rows[0]["text"].startswith(" ")
+    assert set(ok_rows[0]) == {
         "video_id",
         "segment_id",
         "modality",
@@ -56,8 +55,8 @@ def test_segment_id_uses_round_not_int():
         "avg_logprob": -0.2,
         "no_speech_prob": 0.01,
     }  # thêm 2 key này luôn, STEP 14 sẽ cần
-    rows = build_rows("talk01", [seg], PROVENANCE)
-    assert rows[0]["segment_id"] == "talk01_a_00016150"
+    ok_rows, _dlq_rows, _metrics = build_rows("talk01", [seg], 600.0, PROVENANCE)
+    assert ok_rows[0]["segment_id"] == "talk01_a_00016150"
 
 
 def test_quality_score_formula():
@@ -74,6 +73,52 @@ def test_quality_flag_threshold():
 
 def test_running_twice_gives_the_same_rows():
     fixture = json.loads(FIXTURE.read_text())
-    first = build_rows(fixture["video_id"], fixture["segments"], PROVENANCE)
-    second = build_rows(fixture["video_id"], fixture["segments"], PROVENANCE)
+    segs = fixture["segments"] + [make_seg(start=50.0, text="", no_speech_prob=0.1)]
+    first   = build_rows(fixture["video_id"], segs, fixture["duration"], PROVENANCE)
+    second  = build_rows(fixture["video_id"], segs, fixture["duration"], PROVENANCE)
     assert first == second
+    assert len(first[1]) == 1
+
+def test_metrics_counts_segments_in():
+    fixture = json.loads(FIXTURE.read_text())
+    ok_rows, dlq_rows, metrics = build_rows(fixture["video_id"], fixture["segments"], fixture["duration"], PROVENANCE)
+    assert metrics["segments_in"] == 5
+    assert dlq_rows == []
+    assert len(ok_rows) == 5
+
+# Hàm phụ
+def make_seg(start=1.0, end=2.0, text=" hi", avg_logprob=-0.2, no_speech_prob=0.01):
+    return {"start": start, "end": end, "text": text,
+            "avg_logprob": avg_logprob, "no_speech_prob": no_speech_prob}
+
+def test_silence_is_dropped_and_counted():
+    ok, dlq, m = build_rows("v", [make_seg(text="", no_speech_prob=0.9)], 600.0, PROVENANCE)
+    assert ok == []
+    assert dlq == []
+    assert m["dropped_silence"] == 1
+
+def test_silence_threshold_is_inclusive():                 # đúng 0.6 → "≥ 0.6" → bỏ
+    ok, dlq, m = build_rows("v", [make_seg(text="  ", no_speech_prob=0.6)], 600.0, PROVENANCE)
+    assert m["dropped_silence"] == 1
+
+def test_empty_text_with_speech_is_not_silence():          # có người nói mà không ra chữ → KHÔNG phải im lặng
+    ok, dlq, m = build_rows("v", [make_seg(text="", no_speech_prob=0.1)], 600.0, PROVENANCE)
+    assert m["dropped_silence"] == 0
+
+def test_empty_text_with_speech_goes_to_dlq():
+    seg = make_seg(start=50.0, end=52.0, text="", no_speech_prob=0.1)
+    ok, dlq, m = build_rows("v", [seg], 600.0, PROVENANCE)
+    assert ok == []
+    assert len(dlq) == 1
+    row = dlq[0]
+    assert row["reason_code"] == "EMPTY_TEXT"
+    assert row["stage"] == "validate"
+    assert row["record_id"] == "v_a_00050000"              # tự tính segment_id từ "v" và 50.0
+    assert row["status"] == "open" and row["attempts"] == 0
+    assert json.loads(row["raw_payload"]) == seg  # giữ nguyên segment gốc
+    assert row["failed_at"] == PROVENANCE["processed_at"]   # không dùng now()
+
+def test_dlq_row_has_the_eleven_columns():
+    _, dlq, _ = build_rows("v", [make_seg(text="", no_speech_prob=0.1)], 600.0, PROVENANCE)
+    assert set(dlq[0]) == {"dlq_id", "video_id", "record_id", "stage", "reason_code", "error_detail",
+                           "raw_payload", "provenance", "failed_at", "attempts", "status"}
