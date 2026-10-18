@@ -40,3 +40,13 @@ def insert_rows(conn: duckdb.DuckDBPyConnection, table: str, rows: list[dict]) -
     sql = f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({', '.join('?' for _ in cols)})"
     values = [[r[c] for c in cols] for r in rows]
     conn.executemany(sql, values)
+
+def overwrite_video(conn: duckdb.DuckDBPyConnection, table: str, video_id: str, rows: list[dict]) -> None:
+    conn.begin()
+    try:
+        conn.execute(f"DELETE FROM {table} WHERE video_id = ?", [video_id])
+        insert_rows(conn, table, rows)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise

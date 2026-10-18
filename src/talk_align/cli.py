@@ -12,9 +12,9 @@ from pathlib import Path
 
 import duckdb
 
+from talk_align import store
 from talk_align.audio_lane import build_rows, transcribe
 from talk_align.config import BASE_DIR, DB_PATH, AudioParams
-from talk_align.store import connect, insert_rows
 
 # def save_fixture_temp(video_id: str, raw_segments: list[dict], duration: float):
 #     fixture_dir =Path("tests/fixtures")
@@ -102,8 +102,9 @@ def main(argv=None):
 
     rows = build_rows(video_id, raw_segments, provenance)
 
-    conn: duckdb.DuckDBPyConnection = connect(db_path=DB_PATH)
-    insert_rows(conn, "audio_segments", rows)
+    conn: duckdb.DuckDBPyConnection = store.connect(db_path=DB_PATH)
+    # store.insert_rows(conn, "audio_segments", rows)
+    store.overwrite_video(conn, table="audio_segments", video_id=video_id, rows=rows)
     conn.close()
 
     # print(len(rows), rows[0]["segment_id"], rows[0]["provenance"]["run_id"])

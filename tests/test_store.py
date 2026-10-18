@@ -1,7 +1,8 @@
 import json
-import pytest
-import duckdb
 from pathlib import Path
+
+import duckdb
+import pytest
 
 from talk_align import store
 from talk_align.audio_lane import build_rows
@@ -35,3 +36,35 @@ def test_insert_twice_fails():
     with pytest.raises(duckdb.ConstraintException):
         store.insert_rows(con, "audio_segments", rows)
     con.close()
+
+# Simulator rows
+def rows_at(video_id, starts):
+    segs = [{"start": s, "end": s + 2.0, "text": " hi", "avg_logprob": -0.2, "no_speech_prob": 0.01}
+            for s in starts]
+    return build_rows(video_id, segs, PROVENANCE)
+
+def ids(con, video_id):
+    return [r[0] for r in con.execute(
+        "SELECT segment_id FROM audio_segments WHERE video_id = ? ORDER BY 1", [video_id]).fetchall()]
+
+def test_rerun_same_rows_does_not_fail():
+    conn = store.connect(":memory:")
+    store.overwrite_video(conn, "audio_segments", "talk01", rows_at("talk01", [1.0, 4.0]))
+    store.overwrite_video(conn, "audio_segments", "talk01", rows_at("talk01", [1.0, 4.0]))
+    assert ids(conn, "talk01") == ["talk01_a_00001000", "talk01_a_00004000"]
+
+def test_rerun_removes_zombies_and_keeps_other_videos():
+    conn = store.connect(":memory:")
+    store.overwrite_video(conn, "audio_segments", "talk01", rows_at("talk01", [1.0, 4.0, 9.0]))   # "model small"
+    store.overwrite_video(conn, "audio_segments", "talk02", rows_at("talk02", [1.0]))             # video khác
+    store.overwrite_video(conn, "audio_segments", "talk01", rows_at("talk01", [4.0, 6.5]))        # "model base"
+    assert ids(conn, "talk01") == ["talk01_a_00004000", "talk01_a_00006500"]               # chỉ còn dòng của lần chạy mới
+    assert ids(conn, "talk02") == ["talk02_a_00001000"]                 # vẫn còn nguyên
+
+def test_failed_insert_keeps_old_rows():
+    conn = store.connect(":memory:")
+    store.overwrite_video(conn, "audio_segments", "talk01", rows_at("talk01", [1.0, 4.0, 9.0]))
+    broken = rows_at("talk01", [2.0, 2.0])             # 2 dòng TRÙNG id → INSERT sẽ lỗi SAU KHI DELETE đã chạy
+    with pytest.raises(duckdb.ConstraintException):
+        store.overwrite_video(conn, "audio_segments", "talk01", broken)
+    assert ids(conn, "talk01") == ["talk01_a_00001000", "talk01_a_00004000", "talk01_a_00009000"]                 # 3 dòng cũ phải còn nguyên
