@@ -126,8 +126,9 @@ def test_export_writes_one_sorted_file(
         con, "audio_segments", "talk01", rows_at("talk01", [9.0, 1.0, 4.0])
     )
     store.overwrite_video(con, "audio_segments", "talk02", rows_at("talk02", [1.0]))
-    path = store.export_parquet(con, "talk01", tmp_path)
-    exported = duckdb.sql(f"SELECT segment_id FROM '{path}'").fetchall()
+    paths = store.export_parquet(con, "talk01", tmp_path)
+    assert set(paths) == {"audio_segments", "dlq_audio"}
+    exported = duckdb.sql(f"SELECT segment_id FROM '{paths['audio_segments']}'").fetchall()
     assert exported == [
         ("talk01_a_00001000",),
         ("talk01_a_00004000",),

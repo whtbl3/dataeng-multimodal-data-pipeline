@@ -1,7 +1,9 @@
 # tests/test_contract.py
 import pytest
 from pydantic import ValidationError
+
 from talk_align.contract import AudioSegmentRow, reason_code_for
+
 
 def valid_row(**overrides):
     row = {"video_id": "v", "segment_id": "v_a_00001000", "modality": "audio", "text": "hi",

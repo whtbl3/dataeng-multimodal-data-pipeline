@@ -1,7 +1,8 @@
 """Data contract (step ③): validate rows, map errors to reason_code, route to DLQ. Roadmap #2."""
 from typing import Literal
-import json
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
 
 class AudioSegmentRow(BaseModel):
     model_config = ConfigDict(extra="forbid")

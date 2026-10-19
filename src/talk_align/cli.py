@@ -120,8 +120,13 @@ def main(argv=None):
         conn = store.connect(db_path=DB_PATH)
         video_id = args.video_id
         run_id = conn.execute(
-            "SELECT any_value(provenance.run_id) FROM audio_segments WHERE video_id = ?",
-            [video_id],
+            """
+            SELECT any_value(run_id) 
+            FROM (SELECT provenance.run_id AS run_id FROM audio_segments WHERE video_id = ? 
+                UNION ALL 
+                SELECT provenance.run_id AS run_id FROM dlq_audio WHERE video_id = ?
+            )""",
+            [video_id, video_id],
         ).fetchone()[0]
         if run_id is None:
             parser.error(f"No rows for video_id: {video_id}")

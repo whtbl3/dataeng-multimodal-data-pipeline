@@ -84,17 +84,21 @@ def overwrite_video(
 
 def export_parquet(
     conn: duckdb.DuckDBPyConnection, video_id: str, out_dir: Path | None = None
-) -> Path:
+) -> dict[str, Path]:
+    """Write one Parquet file per table with the rows of `video_id`, sorted by primary key."""
+    EXPORT_TABLES = {
+        "audio_segments": "segment_id",
+        "dlq_audio": "dlq_id",
+    }
     out_dir.mkdir(parents=True, exist_ok=True)
-    path = out_dir / "audio_segments.parquet"
-    # table = conn.execute(
-    #     "SELECT * FROM audio_segments WHERE video_id = ? ORDER BY segment_id", video_id
-    # ).to_arrow_table(table, path)
-    path = out_dir / "audio_segments.parquet"
-    conn.execute(
-        f"COPY (SELECT * FROM audio_segments WHERE video_id = ? ORDER BY segment_id) "
-        f"TO '{path}' (FORMAT parquet)",
-        [video_id],
-    )
-    return path
+    written: dict[str, Path] = {}
+    for table, pk in EXPORT_TABLES.items():
+        path = out_dir / f"{table}.parquet"
+        conn.execute(
+            f"COPY (SELECT * FROM {table} WHERE video_id = ? ORDER BY {pk}) "
+            f"TO '{path}' (FORMAT parquet)",
+            [video_id],
+        )
+        written[table] = path
+    return written
 

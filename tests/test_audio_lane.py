@@ -98,16 +98,16 @@ def test_silence_is_dropped_and_counted():
     assert m["dropped_silence"] == 1
 
 def test_silence_threshold_is_inclusive():                 # đúng 0.6 → "≥ 0.6" → bỏ
-    ok, dlq, m = build_rows("v", [make_seg(text="  ", no_speech_prob=0.6)], 600.0, PROVENANCE)
+    _ok, _dlq, m = build_rows("v", [make_seg(text="  ", no_speech_prob=0.6)], 600.0, PROVENANCE)
     assert m["dropped_silence"] == 1
 
 def test_empty_text_with_speech_is_not_silence():          # có người nói mà không ra chữ → KHÔNG phải im lặng
-    ok, dlq, m = build_rows("v", [make_seg(text="", no_speech_prob=0.1)], 600.0, PROVENANCE)
+    _ok, _dlq, m = build_rows("v", [make_seg(text="", no_speech_prob=0.1)], 600.0, PROVENANCE)
     assert m["dropped_silence"] == 0
 
 def test_empty_text_with_speech_goes_to_dlq():
     seg = make_seg(start=50.0, end=52.0, text="", no_speech_prob=0.1)
-    ok, dlq, m = build_rows("v", [seg], 600.0, PROVENANCE)
+    ok, dlq, _m = build_rows("v", [seg], 600.0, PROVENANCE)
     assert ok == []
     assert len(dlq) == 1
     row = dlq[0]
@@ -133,7 +133,7 @@ def test_zero_length_goes_to_dlq():
 
 def test_small_overrun_is_clipped():
     seg = make_seg(start=340.0, end=345.2)
-    ok, dlq, m = build_rows("v", [seg], 344.561, PROVENANCE)
+    ok, _dlq, m = build_rows("v", [seg], 344.561, PROVENANCE)
     assert ok[0]["t_end"] == 344.561
     assert m["clipped_t_end"] == 1
     assert json.loads(ok[0]["raw_payload"])["end"] == 345.2      # bản gốc không bị sửa
@@ -178,3 +178,25 @@ def test_one_bad_segment_does_not_lose_the_good_ones():
     assert len(ok) == 5
     assert len(dlq) == 1
     assert m["segments_in"] == 6
+
+def test_every_segment_is_accounted_for():
+    segs = [
+        make_seg(start=1.0),                                                 # ok
+        make_seg(start=2.0, end=3.0, avg_logprob=-1.2, no_speech_prob=0.5),  # ok nhưng quarantine
+        make_seg(start=3.0, text="", no_speech_prob=0.9),                    # im lặng
+        make_seg(start=4.0, text="", no_speech_prob=0.1),                    # EMPTY_TEXT
+        make_seg(start=6.0, end=5.5),                                        # INVALID_TIME_RANGE
+        make_seg(start=340.0, end=346.0),                                    # TIME_OUT_OF_BOUNDS
+        make_seg(start=7.0, end=8.0, avg_logprob=0.5),                       # SCORE_OUT_OF_RANGE
+        {"start": 8.0},                                                      # SCHEMA_VIOLATION
+    ]
+    _ok, dlq, m = build_rows("v", segs, 344.561, PROVENANCE)
+    assert m["segments_in"] == m["ok"] + m["dlq"] + m["dropped_silence"]
+    assert (m["ok"], m["dlq"], m["dropped_silence"], m["quarantined"]) == (2, 5, 1, 1)
+    assert sorted(r["reason_code"] for r in dlq) == sorted([
+        "EMPTY_TEXT",
+        "INVALID_TIME_RANGE",
+        "TIME_OUT_OF_BOUNDS",
+        "SCORE_OUT_OF_RANGE",
+        "SCHEMA_VIOLATION",
+    ])

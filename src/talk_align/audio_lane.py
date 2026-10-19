@@ -6,8 +6,16 @@ from pathlib import Path
 
 from faster_whisper import WhisperModel
 from pydantic import ValidationError
-from talk_align.config import QUARANTINE_THRESHOLD, SILENCE_THRESHOLD, TIME_TOLERANCE_S, WORK_DIR, AudioParams
-from talk_align.contract import AudioSegmentRow, reason_code_for, make_error_detail
+
+from talk_align.config import (
+    QUARANTINE_THRESHOLD,
+    SILENCE_THRESHOLD,
+    TIME_TOLERANCE_S,
+    WORK_DIR,
+    AudioParams,
+)
+from talk_align.contract import AudioSegmentRow, make_error_detail, reason_code_for
+
 
 def transcribe(video_path: Path, params: AudioParams) -> tuple[list[dict], float]:
     work_dir = WORK_DIR / video_path.stem
@@ -183,4 +191,7 @@ def build_rows(video_id: str, raw_segments: list[dict], duration: float, provena
             ok_rows.append(segment)
         except (KeyError, TypeError, AttributeError, ValueError) as e:
             dlq_rows.append(make_dlq_row(index, video_id, item, "SCHEMA_VIOLATION", f"{type(e).__name__}: {e}", provenance))
+    metrics["ok"] = len(ok_rows)
+    metrics["dlq"] = len(dlq_rows)
+    metrics["quarantined"] = sum(1 for r in ok_rows if r["quality_flag"] == "quarantine")
     return ok_rows, dlq_rows, metrics
