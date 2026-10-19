@@ -96,7 +96,12 @@ quality_flag, keyframe_path, raw_payload, provenance`
 `dlq_id, video_id, record_id, stage, reason_code, error_detail, raw_payload,
 provenance, failed_at, attempts, status`
 - `dlq_id` tất định từ `(video_id, stage, record_id)`; khi chưa có `record_id` (crash
-  trước khi biết `t_start`) thì dùng thứ tự trong output thô.
+  trước khi biết `t_start`) thì dùng thứ tự trong output thô. Đã cài:
+  `dlq_validate_<record_id>` (vd `dlq_validate_v_a_00050000`; `record_id` đã chứa
+  `video_id`), hoặc `dlq_validate_<video_id>_raw<index:05d>` khi thiếu `start`
+  (`record_id` = NULL).
+- `failed_at` = `provenance.processed_at` của lần chạy, không gọi `now()` trong lane, để
+  `build_rows` vẫn là hàm thuần và chạy 2 lần ra cùng dòng DLQ.
 - `stage`: audio `extract | transcribe | validate | write`; frame
   `extract | ocr | validate | write`.
 - `status`: `open | replayed | ignored`. Replay 3 lần vẫn lỗi (`attempts >= 3`) thì
@@ -109,9 +114,9 @@ Viết hoa, mô tả lỗi chứ không mô tả cách sửa.
 |---|---|---|
 | `INVALID_TIME_RANGE` | `t_end <= t_start` | |
 | `EMPTY_TEXT` | `text == ""` và `no_speech_prob` < `silence_threshold` (0.6) | Nếu ≥ ngưỡng thì là im lặng: bỏ, đếm `dropped_silence` |
-| `TIME_OUT_OF_BOUNDS` | `t_end > duration + 1.0` | Vượt ≤ 1 s (padding của Whisper): cắt về duration, đếm `clipped_t_end` |
+| `TIME_OUT_OF_BOUNDS` | `t_start >= duration`, hoặc `t_end > duration + 1.0` | Vượt ≤ 1 s (padding của Whisper): cắt về duration, đếm `clipped_t_end`. Kiểm tra `t_start` trước khi cắt, để không sinh `t_end < t_start` |
 | `SCORE_OUT_OF_RANGE` | `quality_score` ngoài [0, 1] | Bug của mình: sửa code, tìm dòng bị ảnh hưởng qua `code_version` |
-| `SCHEMA_VIOLATION` | Pydantic báo lỗi kiểu/field khác | Lỗi Pydantic không tự có reason_code, phải map |
+| `SCHEMA_VIOLATION` | Pydantic báo lỗi kiểu/field khác; hoặc segment thô thiếu key / sai kiểu (`KeyError`, `TypeError`, `AttributeError`, `ValueError`) | Lỗi Pydantic không tự có reason_code, phải map. Không bắt `Exception` chung, để bug code (`NameError`...) vẫn crash |
 | `TRANSCRIBE_FAILED` | Whisper crash | |
 | `CORRUPT_KEYFRAME` | Không đọc được file keyframe | Replay: cắt lại keyframe từ video |
 | `OCR_FAILED` | OCR crash | |

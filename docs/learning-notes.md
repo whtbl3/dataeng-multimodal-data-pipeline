@@ -314,6 +314,57 @@ Những điều tự phát hiện khi chạy thật, không có trong spec lúc 
   từ đó `build_rows` phát triển bằng pytest.
 - Fixture nằm ở `tests/` (commit, test chạy được ở mọi máy), không ở `data/`.
 
+## 12. Bài học khi làm roadmap #2 (2026-10-19)
+
+### Thứ tự luật trong `build_rows`
+Mỗi luật là một khối `if ...: <đếm hoặc thêm DLQ>; continue`. Dòng nào qua hết mới vào
+`ok_rows`. Thứ tự đã chốt:
+```
+1. text rỗng + no_speech_prob ≥ 0.6   → bỏ, dropped_silence
+2. text rỗng                          → EMPTY_TEXT        (tới đây chắc chắn < 0.6)
+3. t_end ≤ t_start                    → INVALID_TIME_RANGE
+4. t_start ≥ duration                 → TIME_OUT_OF_BOUNDS (trước khi cắt!)
+5. t_end − duration > 1.0             → TIME_OUT_OF_BOUNDS
+6. 0 < t_end − duration ≤ 1.0         → cắt t_end = duration, clipped_t_end
+7. Pydantic AudioSegmentRow           → SCORE_OUT_OF_RANGE / SCHEMA_VIOLATION
+   (cả vòng bọc try/except KeyError, TypeError, AttributeError, ValueError → SCHEMA_VIOLATION)
+```
+- Luật 4 đứng trước luật 6: `start=344.8, end=345.0, duration=344.561` nếu cắt trước sẽ
+  ra `t_end=344.561 < t_start`. Thứ tự luật là một phần của logic, cần test riêng.
+- `t_end` là biến riêng (có thể bị cắt); `raw_payload` vẫn giữ `end` gốc.
+
+### Thiết kế
+- **Bất biến "không mất segment":** `segments_in == ok + dlq + dropped_silence`. Một test
+  đưa đủ 8 loại segment kiểm tra đẳng thức này: nhánh nào quên thêm DLQ hoặc quên đếm là
+  test fail.
+- `make_dlq_row` dùng chung cho mọi reason_code; `make_segment_id` tách riêng để công thức
+  id chỉ ở một chỗ. Khi thiếu `start`, `make_dlq_row` không được ném lỗi lần nữa (lỗi
+  trong `except` không còn gì bắt).
+- `failed_at` lấy từ `provenance.processed_at`: thử đổi sang `now()` thì test "chạy 2 lần"
+  fail ngay.
+- Chỉ bắt lỗi do dữ liệu; bắt `Exception` sẽ biến một lỗi gõ tên hàm (`NameError`) thành
+  78 dòng DLQ.
+- Pydantic: `e.errors()` trả về mọi lỗi cùng lúc, mỗi lỗi có `loc` (cột) và `type`.
+  `reason_code_for` map: lỗi ở `quality_score` → `SCORE_OUT_OF_RANGE` (thường là bug công
+  thức), còn lại → `SCHEMA_VIOLATION`. `extra="forbid"` bắt cột thừa trước DuckDB.
+
+### Ghi DuckDB
+- Ghi `audio_segments` và `dlq_audio` trong **một** transaction
+  (`overwrite_video_tables`); test cho `dlq_audio` lỗi sau khi `audio_segments` đã ghi
+  xong → cả hai rollback.
+- Bảng rỗng: **luôn DELETE**, chỉ INSERT khi có dòng. `insert_rows([])` lỗi ở `rows[0]`;
+  bỏ cả DELETE thì dòng DLQ cũ của lỗi đã sửa vẫn nằm lại.
+- `overwrite_video(conn, table, ...)` cũ giữ lại, gọi sang hàm mới: 10 chỗ gọi trong test
+  không phải sửa, logic transaction chỉ ở một chỗ.
+- `CREATE TABLE IF NOT EXISTS` tự thêm bảng `dlq_audio` vào `lab1.duckdb` cũ, không cần
+  xóa file.
+- Export: mỗi bảng một file, bảng rỗng vẫn ra file 0 dòng đủ cột. `run_id` lấy từ cả hai
+  bảng (`UNION ALL`), vì video có thể có toàn bộ segment vào DLQ.
+
+### Kết quả trên `lakehouse.mp4`
+`{'segments_in': 78, 'dropped_silence': 0, 'clipped_t_end': 0, 'ok': 78, 'dlq': 0,
+'quarantined': 0}`: video sạch, mọi luật chỉ được kiểm bằng segment tự tạo trong test.
+
 ## Câu hỏi tự kiểm tra
 
 | Câu hỏi | Test kiểm tra |
@@ -324,6 +375,14 @@ Những điều tự phát hiện khi chạy thật, không có trong spec lúc 
 | INSERT 2 lần vào bảng có PRIMARY KEY thì sao? | `test_insert_twice_fails` |
 | Vì sao rerun cả video phải DELETE + INSERT? | `test_rerun_removes_zombies_and_keeps_other_videos` |
 | Crash giữa DELETE và INSERT thì sao? | `test_failed_insert_keeps_old_rows` |
+| Text rỗng lúc nào bị bỏ, lúc nào vào DLQ? Đúng 0.6 thì sao? | `test_silence_is_dropped_and_counted`, `test_silence_threshold_is_inclusive`, `test_empty_text_with_speech_goes_to_dlq` |
+| `t_end` vượt `duration` bao nhiêu thì cắt, bao nhiêu thì DLQ? | `test_small_overrun_is_clipped`, `test_overrun_at_tolerance_is_still_clipped`, `test_large_overrun_goes_to_dlq` |
+| Câu bắt đầu sau khi video hết thì sao? | `test_segment_starting_after_video_end_goes_to_dlq` |
+| Segment thiếu `start` thì `dlq_id` là gì? | `test_missing_start_uses_raw_index` |
+| Một segment hỏng có làm mất segment tốt không? | `test_one_bad_segment_does_not_lose_the_good_ones` |
+| Có segment nào có thể "biến mất" không? | `test_every_segment_is_accounted_for` |
+| Vì sao 2 bảng phải chung 1 transaction? | `test_failure_in_dlq_rolls_back_audio_too` |
+| Lần chạy mới hết lỗi thì dòng DLQ cũ đi đâu? | `test_rerun_without_errors_clears_old_dlq_rows` |
 | Replay 2 lần ra mấy dòng? | (roadmap #7) |
 | Slide 0.4 s do chuyển cảnh xử lý ra sao, vì sao không vào DLQ? | (roadmap #3) |
 | Slide không có chữ vào đâu, vì sao không vào DLQ? | (roadmap #4) |
