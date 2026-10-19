@@ -83,82 +83,112 @@ def quality_flag(score) -> str:
     label = "ok" if score >= QUARANTINE_THRESHOLD else "quarantine"
     return label
 
+
 def make_segment_id(video_id: str, start: float) -> str:
     return f"{video_id}_a_{round(start * 1000):08d}"
 
-def make_dlq_row(index: int, video_id: str, item: dict, reason_code: str, error_detail: str, provenance: dict) -> dict:
+
+def make_dlq_row(
+    index: int,
+    video_id: str,
+    item: dict,
+    reason_code: str,
+    error_detail: str,
+    provenance: dict,
+) -> dict:
     try:
         record_id = make_segment_id(video_id, item["start"])
         dlq_id = f"dlq_validate_{record_id}"
     except (KeyError, TypeError, ValueError):
         record_id = None
         dlq_id = f"dlq_validate_{video_id}_raw{index:05d}"
-    
+
     dlq_dict = {
-    "dlq_id": dlq_id,
-    "video_id": video_id,
-    "record_id": record_id,
-    "stage": "validate",
-    "reason_code": reason_code,
-    "error_detail": error_detail,
-    "raw_payload": json.dumps(item, ensure_ascii=False),
-    "provenance": provenance,
-    "failed_at": provenance["processed_at"],
-    "attempts": 0,
-    "status": "open"
+        "dlq_id": dlq_id,
+        "video_id": video_id,
+        "record_id": record_id,
+        "stage": "validate",
+        "reason_code": reason_code,
+        "error_detail": error_detail,
+        "raw_payload": json.dumps(item, ensure_ascii=False),
+        "provenance": provenance,
+        "failed_at": provenance["processed_at"],
+        "attempts": 0,
+        "status": "open",
     }
     return dlq_dict
 
 
-def build_rows(video_id: str, raw_segments: list[dict], duration: float, provenance: dict) -> tuple[list[dict], list[dict], dict]:
+def build_rows(
+    video_id: str, raw_segments: list[dict], duration: float, provenance: dict
+) -> tuple[list[dict], list[dict], dict]:
     ok_rows = []
     dlq_rows = []
-    metrics = {"segments_in": len(raw_segments), "dropped_silence": 0, "clipped_t_end": 0}
+    metrics = {
+        "segments_in": len(raw_segments),
+        "dropped_silence": 0,
+        "clipped_t_end": 0,
+    }
     for index, item in enumerate(raw_segments):
         try:
-            if item["text"].strip() == "" and item["no_speech_prob"] >= SILENCE_THRESHOLD:
+            if (
+                item["text"].strip() == ""
+                and item["no_speech_prob"] >= SILENCE_THRESHOLD
+            ):
                 metrics["dropped_silence"] += 1
                 continue
             if item["text"].strip() == "":
-                dlq_rows.append(make_dlq_row(
-                    index,
-                    video_id,
-                    item,
-                    "EMPTY_TEXT",
-                    f"text is empty but no_speech_prob={item['no_speech_prob']:.2f} < {SILENCE_THRESHOLD}",
-                    provenance
-                ))
+                dlq_rows.append(
+                    make_dlq_row(
+                        index,
+                        video_id,
+                        item,
+                        "EMPTY_TEXT",
+                        f"text is empty but no_speech_prob={item['no_speech_prob']:.2f} < {SILENCE_THRESHOLD}",
+                        provenance,
+                    )
+                )
                 continue
             if item["start"] >= item["end"]:
-                dlq_rows.append(make_dlq_row(
-                    index,
-                    video_id,
-                    item,
-                    "INVALID_TIME_RANGE",
-                    f"{item['start']} >= {item["end"]}",
-                    provenance
-                ))
+                dlq_rows.append(
+                    make_dlq_row(
+                        index,
+                        video_id,
+                        item,
+                        "INVALID_TIME_RANGE",
+                        f"{item['start']} >= {item['end']}",
+                        provenance,
+                    )
+                )
                 continue
             if item["start"] >= duration:
-                dlq_rows.append(make_dlq_row(
-                    index,
-                    video_id, item, "TIME_OUT_OF_BOUNDS",
-                    f"t_start={item['start']} >= duration={duration}",
-                    provenance,
-                ))
+                dlq_rows.append(
+                    make_dlq_row(
+                        index,
+                        video_id,
+                        item,
+                        "TIME_OUT_OF_BOUNDS",
+                        f"t_start={item['start']} >= duration={duration}",
+                        provenance,
+                    )
+                )
                 continue
             t_end = item["end"]
-            overshoot = t_end - duration                 # vượt bao nhiêu giây (âm = không vượt)
-            if overshoot > TIME_TOLERANCE_S:             # vượt quá nhiều → DLQ
-                dlq_rows.append(make_dlq_row(
-                    index,
-                    video_id, item, "TIME_OUT_OF_BOUNDS",
-                    f"t_end={t_end} exceeds duration={duration} by {overshoot:.3f}s > {TIME_TOLERANCE_S}s",
-                    provenance,
-                ))
+            overshoot = t_end - duration  # vượt bao nhiêu giây (âm = không vượt)
+            if overshoot > TIME_TOLERANCE_S:  # vượt quá nhiều → DLQ
+                dlq_rows.append(
+                    make_dlq_row(
+                        index,
+                        video_id,
+                        item,
+                        "TIME_OUT_OF_BOUNDS",
+                        f"t_end={t_end} exceeds duration={duration} by {overshoot:.3f}s > {TIME_TOLERANCE_S}s",
+                        provenance,
+                    )
+                )
                 continue
 
-            if overshoot > 0:                            # vượt một chút → cắt, đếm
+            if overshoot > 0:  # vượt một chút → cắt, đếm
                 t_end = duration
                 metrics["clipped_t_end"] += 1
             score = quality_score(item)
@@ -184,14 +214,25 @@ def build_rows(video_id: str, raw_segments: list[dict], duration: float, provena
                         item,
                         reason_code_for(e),
                         make_error_detail(e),
-                        provenance
+                        provenance,
                     )
                 )
                 continue
             ok_rows.append(segment)
         except (KeyError, TypeError, AttributeError, ValueError) as e:
-            dlq_rows.append(make_dlq_row(index, video_id, item, "SCHEMA_VIOLATION", f"{type(e).__name__}: {e}", provenance))
+            dlq_rows.append(
+                make_dlq_row(
+                    index,
+                    video_id,
+                    item,
+                    "SCHEMA_VIOLATION",
+                    f"{type(e).__name__}: {e}",
+                    provenance,
+                )
+            )
     metrics["ok"] = len(ok_rows)
     metrics["dlq"] = len(dlq_rows)
-    metrics["quarantined"] = sum(1 for r in ok_rows if r["quality_flag"] == "quarantine")
+    metrics["quarantined"] = sum(
+        1 for r in ok_rows if r["quality_flag"] == "quarantine"
+    )
     return ok_rows, dlq_rows, metrics

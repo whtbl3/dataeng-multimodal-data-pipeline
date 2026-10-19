@@ -1,4 +1,5 @@
 """Data contract (step ③): validate rows, map errors to reason_code, route to DLQ. Roadmap #2."""
+
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -20,6 +21,7 @@ class AudioSegmentRow(BaseModel):
 
 def make_error_detail(err: ValidationError) -> str:
     return "; ".join(f"{e['loc'][0]}: {e['msg']}" for e in err.errors())
+
 
 def reason_code_for(err: ValidationError) -> str:
     """Map a Pydantic error to our DLQ reason_code."""

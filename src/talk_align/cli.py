@@ -108,14 +108,18 @@ def main(argv=None):
 
         raw_segments, duration = transcribe(video_path, params)
 
-        ok_rows, dlq_rows, metrics = build_rows(video_id, raw_segments, duration, provenance)
+        ok_rows, dlq_rows, metrics = build_rows(
+            video_id, raw_segments, duration, provenance
+        )
 
         conn: duckdb.DuckDBPyConnection = store.connect(db_path=DB_PATH)
         # store.insert_rows(conn, "audio_segments", rows)
         # store.overwrite_video(
         #     conn, table="audio_segments", video_id=video_id, rows=rows
         # )
-        store.overwrite_video_tables(conn, video_id, {"audio_segments": ok_rows, "dlq_audio": dlq_rows})
+        store.overwrite_video_tables(
+            conn, video_id, {"audio_segments": ok_rows, "dlq_audio": dlq_rows}
+        )
         conn.close()
         print(metrics)
 
@@ -144,9 +148,12 @@ def main(argv=None):
             parser.error(f"File not exist: {video_path}")
         video_id: str = video_path.stem
         params = FrameParams()
-        detect_scene_times(video_path, params)
+        raw_times = detect_scene_times(video_path, params)
+        print(raw_times)
+        
 
     return 0
+
 
 if __name__ == "__main__":
     sys.exit(main())

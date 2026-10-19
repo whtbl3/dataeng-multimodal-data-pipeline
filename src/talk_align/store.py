@@ -49,6 +49,7 @@ def create_schema(conn: duckdb.DuckDBPyConnection):
     conn.execute(audio_segment_table)
     conn.execute(dlq_audio_table)
 
+
 def connect(db_path) -> duckdb.DuckDBPyConnection:
     conn: duckdb.DuckDBPyConnection = duckdb.connect(str(db_path))
     create_schema(conn)
@@ -61,7 +62,10 @@ def insert_rows(conn: duckdb.DuckDBPyConnection, table: str, rows: list[dict]) -
     values = [[r[c] for c in cols] for r in rows]
     conn.executemany(sql, values)
 
-def overwrite_video_tables(conn: duckdb.DuckDBPyConnection, video_id: str, tables: dict[str, list[dict]]) -> None:
+
+def overwrite_video_tables(
+    conn: duckdb.DuckDBPyConnection, video_id: str, tables: dict[str, list[dict]]
+) -> None:
     try:
         conn.begin()
         for table, rows in tables.items():
@@ -79,7 +83,6 @@ def overwrite_video(
 ) -> None:
     tables = {table: rows}
     overwrite_video_tables(conn, video_id, tables)
-
 
 
 def export_parquet(
@@ -101,4 +104,3 @@ def export_parquet(
         )
         written[table] = path
     return written
-
