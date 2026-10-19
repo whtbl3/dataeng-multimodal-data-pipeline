@@ -365,6 +365,26 @@ Mỗi luật là một khối `if ...: <đếm hoặc thêm DLQ>; continue`. Dò
 `{'segments_in': 78, 'dropped_silence': 0, 'clipped_t_end': 0, 'ok': 78, 'dlq': 0,
 'quarantined': 0}`: video sạch, mọi luật chỉ được kiểm bằng segment tự tạo trong test.
 
+## 13. Scene detect trên video thật (2026-10-19, trước roadmap #3)
+
+Ngưỡng `gt(scene,0.3)` ở §3 được chọn trước khi đo. Đo trên `lakehouse.mp4` (10335 frame):
+```
+so từng frame:   điểm cao nhất 0.099 → > 0.3: 0 mốc → cả video 1 slide
+                 > 0.05: 15 frame, dồn cụm (13.2, 13.3, 13.4 ...) = một cú fade kéo dài
+lấy mẫu 1 fps:   > 0.3 : 9 mốc  [5, 13, 14, 20, 39, 40, 83, 91, 344]
+                 > 0.15: 15 mốc [5, 6, 13, 14, 20, 39, 40, 83, 91, 150, 194, 225, 254, 340, 344]
+```
+- Chuyển slide dạng **fade**: mỗi frame chỉ khác frame trước một chút, nên so từng frame
+  không bao giờ vượt ngưỡng. Lấy mẫu 1 fps thì hai mẫu cách nhau 1 s, cả cú fade dồn vào
+  một bước nhảy.
+- Đối chiếu số trang ở góc slide: mốc 150, 194, 225, 254 khớp slide 9→10→11→12→13. Ngưỡng
+  0.3 bỏ sót cả 4 (giây 91 → 340 thành một slide).
+- Không bắt được: đổi chữ trong cùng slide (slide 9 "Pros" → "Cons", ~giây 95–115) vì nền
+  và hình giữ nguyên. Chấp nhận; OCR ở roadmap #4 có thể cho thấy.
+- Mốc ở 344 là fade về đen cuối video (duration 344.561).
+- Bài học: ngưỡng trong spec là giả định; **đo phân phối trên dữ liệu thật trước khi
+  code** (ffmpeg `metadata=print` in `lavfi.scene_score` từng frame).
+
 ## Câu hỏi tự kiểm tra
 
 | Câu hỏi | Test kiểm tra |

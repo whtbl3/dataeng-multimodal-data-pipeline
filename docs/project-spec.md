@@ -56,7 +56,7 @@ Mọi bảng nằm trong `data/lab1.duckdb`. Cột chung theo contract: `video_i
 | Field | Ý nghĩa |
 |---|---|
 | `model`, `model_version` | vd `faster-whisper` / `small`; `rapidocr` / phiên bản package |
-| `params` | audio: `device`, `compute_type`, `beam_size`, `language`, `temperature`; frame: `scene_threshold`, `min_duration`, `min_box_chars`, `min_box_height_ratio` |
+| `params` | audio: `device`, `compute_type`, `beam_size`, `language`, `temperature`; frame: `sample_fps`, `scene_threshold`, `min_duration`, `min_box_chars`, `min_box_height_ratio` |
 | `source_hash` | sha256 của file video |
 | `code_version` | git commit, thêm `-dirty` nếu working tree có thay đổi |
 | `run_id`, `processed_at` | khác nhau mỗi lần chạy, bỏ qua khi so idempotency |
@@ -77,7 +77,10 @@ quality_flag, raw_payload, provenance`
 `video_id, slide_id, modality='frame', text, t_start, t_end, quality_score,
 quality_flag, keyframe_path, raw_payload, provenance`
 - `slide_id = f"{video_id}_s_{round(t_start * 1000):08d}"`.
-- `t_start`: mốc scene change (`select='eq(n,0)+gt(scene,0.3)'`, có keyframe t=0).
+- `t_start`: mốc scene change trên luồng **lấy mẫu 1 fps**
+  (`fps=1,select='eq(n,0)+gt(scene,0.15)'`, có keyframe t=0). Mốc chính xác tới 1 s.
+  So từng frame với ngưỡng 0.3 không dùng được: chuyển slide dạng fade nên điểm từng frame
+  tối đa 0.099 trên `lakehouse.mp4` (xem learning-notes §13).
   `t_end = LEAD(t_start)`; slide cuối thì `t_end` = duration (ffprobe).
 - Mốc cách mốc kế < `min_duration` (1.5 s) là chuyển cảnh: bỏ mốc đó, slide trước kéo
   dài tới mốc kế, đếm `merged_transitions`. Không vào DLQ, không mất slide nào.
@@ -205,6 +208,7 @@ data/out/<run_id>/            *.parquet + report.md
 | Join chỉ lọc quarantine phía audio; `aligned.slide_quality_flag` để người dùng tự lọc | Final | §4 `aligned` |
 | DLQ chỉ chứa lỗi xử lý; chất lượng kém → `quality_flag` | Final | docs/intent.md |
 | Whisper `small`, CPU int8, `temperature=0`, `language="en"` | Final | docs/tech-stack.md |
+| Scene detect: lấy mẫu 1 fps + ngưỡng 0.15 (thay cho từng frame + 0.3); calibrate lại ở roadmap #9. Chấp nhận sót đổi chữ trong cùng slide | Final | learning-notes §13 |
 | Không làm CI/CD; `pytest` + `ruff` chạy local trước khi commit | Final | roadmap #10 |
 | Khóa `av<19`: av 19 bỏ `metadata_errors` mà faster-whisper 1.2.1 dùng | Final | docs/learning-notes.md §11 |
 | `quality_score` audio hiện chung theo cửa sổ Whisper (`seek`), chưa theo câu; xem lại khi làm `word_timestamps` | Open | docs/learning-notes.md §11 |
