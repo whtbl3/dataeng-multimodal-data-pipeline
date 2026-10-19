@@ -30,3 +30,11 @@ class AudioParams:
 
 SILENCE_THRESHOLD = 0.6
 TIME_TOLERANCE_S = 1.0
+
+@dataclass(frozen=True)
+class FrameParams:
+    sample_fps: int = 1
+    scene_threshold = 0.15
+    min_duration = 1.5 # 2 mốc ít hơn mốc này thì gộp lại thành step 4
+
+KEYFRAME_DIR = DATA_DIR / "keyframes"

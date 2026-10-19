@@ -14,7 +14,8 @@ import duckdb
 
 from talk_align import store
 from talk_align.audio_lane import build_rows, transcribe
-from talk_align.config import BASE_DIR, DB_PATH, OUT_DIR, AudioParams
+from talk_align.frame_lane import detect_scene_times
+from talk_align.config import BASE_DIR, DB_PATH, OUT_DIR, AudioParams, FrameParams
 
 # def save_fixture_temp(video_id: str, raw_segments: list[dict], duration: float):
 #     fixture_dir =Path("tests/fixtures")
@@ -90,12 +91,15 @@ def main(argv=None):
     export_parser.add_argument(
         "-o", "--out", type=Path, help="Output directory or file path"
     )
+    # Subcommand: Frames
+    frame_parser = subparser.add_parser("frames", help="Extract one keyframe per slide")
+    frame_parser.add_argument("video", type=Path, help="Path to input video file")
 
     args = parser.parse_args(argv)
     if args.command == "audio":
         # save_fixture_temp(video_id=video_id, raw_segments=raw_segments, duration=duration)
         video_path: Path = args.video
-        if not video_path.exists():  # ← thêm 2 dòng này
+        if not video_path.exists():
             parser.error(f"File not exist: {video_path}")
         video_id: str = video_path.stem
 
@@ -134,6 +138,14 @@ def main(argv=None):
         output_path = store.export_parquet(conn, video_id, out_dir)
         conn.close()
         print(output_path)
+    elif args.command == "frames":
+        video_path: Path = args.video
+        if not video_path.exists():
+            parser.error(f"File not exist: {video_path}")
+        video_id: str = video_path.stem
+        params = FrameParams()
+        detect_scene_times(video_path, params)
+
     return 0
 
 if __name__ == "__main__":
