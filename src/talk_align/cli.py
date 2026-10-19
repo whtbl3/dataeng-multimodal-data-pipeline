@@ -14,8 +14,9 @@ import duckdb
 
 from talk_align import store
 from talk_align.audio_lane import build_rows, transcribe
-from talk_align.frame_lane import detect_scene_times
 from talk_align.config import BASE_DIR, DB_PATH, OUT_DIR, AudioParams, FrameParams
+from talk_align.frame_lane import build_slide_spans, detect_scene_times
+from talk_align.media import probe_duration
 
 # def save_fixture_temp(video_id: str, raw_segments: list[dict], duration: float):
 #     fixture_dir =Path("tests/fixtures")
@@ -148,8 +149,11 @@ def main(argv=None):
             parser.error(f"File not exist: {video_path}")
         video_id: str = video_path.stem
         params = FrameParams()
-        raw_times = detect_scene_times(video_path, params)
-        print(raw_times)
+        duration = probe_duration(video_path)
+        times = detect_scene_times(video_path, params)
+        print(duration, times)
+        spans, metrics = build_slide_spans(times, duration, params.min_duration)
+        for s in spans: print(s)
         
 
     return 0

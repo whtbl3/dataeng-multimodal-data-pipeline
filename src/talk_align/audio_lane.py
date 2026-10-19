@@ -15,6 +15,7 @@ from talk_align.config import (
     AudioParams,
 )
 from talk_align.contract import AudioSegmentRow, make_error_detail, reason_code_for
+from talk_align.media import probe_duration
 
 
 def transcribe(video_path: Path, params: AudioParams) -> tuple[list[dict], float]:
@@ -40,20 +41,7 @@ def transcribe(video_path: Path, params: AudioParams) -> tuple[list[dict], float
         ]
         subprocess.run(cmd_make_wav, check=True)
 
-    cmd_get_duration = [
-        "ffprobe",
-        "-v",
-        "error",
-        "-show_entries",
-        "format=duration",
-        "-of",
-        "default=noprint_wrappers=1:nokey=1",
-        str(video_path),
-    ]
-    result_duration = subprocess.run(
-        cmd_get_duration, check=True, capture_output=True, text=True
-    )
-    duration = float(result_duration.stdout.strip())
+    duration = probe_duration(video_path)
 
     model = WhisperModel(
         model_size_or_path=params.model,
