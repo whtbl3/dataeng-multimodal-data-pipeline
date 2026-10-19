@@ -6,7 +6,7 @@ import pytest
 
 from talk_align import store
 from talk_align.audio_lane import build_rows
-from tests.test_audio_lane import PROVENANCE
+from tests.test_audio_lane import PROVENANCE, make_seg
 
 FIXTURE = Path(__file__).parent / "fixtures" / "whisper_lakehouse.json"
 
@@ -133,3 +133,46 @@ def test_export_writes_one_sorted_file(
         ("talk01_a_00004000",),
         ("talk01_a_00009000",),
     ]  # chỉ talk01, và đã SẮP XẾP theo segment_id
+
+
+def test_dlq_rows_are_written():
+    con = store.connect(":memory:")
+    ok, dlq, _ = build_rows(
+        "v",
+        [make_seg(), make_seg(start=5.0, text="", no_speech_prob=0.1)],
+        600.0,
+        PROVENANCE,
+    )
+    store.overwrite_video_tables(con, "v", {"audio_segments": ok, "dlq_audio": dlq})
+    assert con.execute("SELECT count(*) FROM audio_segments").fetchone()[0] == 1
+    assert con.execute("SELECT reason_code FROM dlq_audio").fetchall() == [("EMPTY_TEXT",)]
+    con.close()
+
+
+def test_rerun_without_errors_clears_old_dlq_rows():
+    con = store.connect(":memory:")
+    _, dlq, _ = build_rows("v", [make_seg(text="", no_speech_prob=0.1)], 600.0, PROVENANCE)
+    store.overwrite_video_tables(con, "v", {"audio_segments": [], "dlq_audio": dlq})  # lần 1: có lỗi
+    ok, _, _ = build_rows("v", [make_seg()], 600.0, PROVENANCE)
+    store.overwrite_video_tables(con, "v", {"audio_segments": ok, "dlq_audio": []})  # lần 2: hết lỗi
+    assert con.execute("SELECT count(*) FROM dlq_audio").fetchone()[0] == 0
+    con.close()
+
+
+def test_failure_in_dlq_rolls_back_audio_too():
+    con = store.connect(":memory:")
+    old_ok, _, _ = build_rows("v", [make_seg(start=1.0)], 600.0, PROVENANCE)
+    store.overwrite_video_tables(con, "v", {"audio_segments": old_ok, "dlq_audio": []})
+    new_ok, dlq, _ = build_rows(
+        "v",
+        [make_seg(start=9.0), make_seg(start=5.0, text="", no_speech_prob=0.1)],
+        600.0,
+        PROVENANCE,
+    )
+    with pytest.raises(duckdb.ConstraintException):
+        store.overwrite_video_tables(
+            con, "v", {"audio_segments": new_ok, "dlq_audio": dlq + dlq}  # dlq trùng id → lỗi
+        )
+    ids = [r[0] for r in con.execute("SELECT segment_id FROM audio_segments").fetchall()]
+    assert ids == ["v_a_00001000"]  # audio quay về dòng CŨ
+    con.close()

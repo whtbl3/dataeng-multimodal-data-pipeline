@@ -104,14 +104,16 @@ def main(argv=None):
 
         raw_segments, duration = transcribe(video_path, params)
 
-        rows, _dlq, _metrics = build_rows(video_id, raw_segments, provenance)
+        ok_rows, dlq_rows, metrics = build_rows(video_id, raw_segments, duration, provenance)
 
         conn: duckdb.DuckDBPyConnection = store.connect(db_path=DB_PATH)
         # store.insert_rows(conn, "audio_segments", rows)
-        store.overwrite_video(
-            conn, table="audio_segments", video_id=video_id, rows=rows
-        )
+        # store.overwrite_video(
+        #     conn, table="audio_segments", video_id=video_id, rows=rows
+        # )
+        store.overwrite_video_tables(conn, video_id, {"audio_segments": ok_rows, "dlq_audio": dlq_rows})
         conn.close()
+        print(metrics)
 
         # print(len(rows), rows[0]["segment_id"], rows[0]["provenance"]["run_id"])
     elif args.command == "export":

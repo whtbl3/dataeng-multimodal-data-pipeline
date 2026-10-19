@@ -155,3 +155,26 @@ def test_positive_logprob_gives_score_out_of_range():
     ok, dlq, _ = build_rows("v", [make_seg(avg_logprob=0.5)], 600.0, PROVENANCE)
     assert ok == []
     assert dlq[0]["reason_code"] == "SCORE_OUT_OF_RANGE"
+
+def test_missing_text_goes_to_dlq_without_crashing():
+    _, dlq, _ = build_rows("v", [{"start": 3.0, "end": 4.0}], 600.0, PROVENANCE)
+    assert dlq[0]["reason_code"] == "SCHEMA_VIOLATION"
+    assert dlq[0]["record_id"] == "v_a_00003000"              # có start → vẫn tính được
+
+def test_missing_start_uses_raw_index():
+    segs = [make_seg(), {"end": 4.0, "text": " x"}]   # segment hỏng ở vị trí index 1
+    _, dlq, _ = build_rows("v", segs, 600.0, PROVENANCE)
+    assert dlq[0]["record_id"] is None
+    assert dlq[0]["dlq_id"] == "dlq_validate_v_raw00001"
+
+def test_text_none_goes_to_dlq():
+    _, dlq, _ = build_rows("v", [make_seg(text=None)], 600.0, PROVENANCE)
+    assert dlq[0]["reason_code"] == "SCHEMA_VIOLATION"
+
+def test_one_bad_segment_does_not_lose_the_good_ones():
+    fixture = json.loads(FIXTURE.read_text())
+    segs = fixture["segments"] + [{"start": 99.0}]
+    ok, dlq, m = build_rows("lakehouse", segs, fixture["duration"], PROVENANCE)
+    assert len(ok) == 5
+    assert len(dlq) == 1
+    assert m["segments_in"] == 6

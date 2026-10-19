@@ -31,8 +31,23 @@ def create_schema(conn: duckdb.DuckDBPyConnection):
         provenance      {provenance_struct}
     )
     """
+    dlq_audio_table = f"""
+    CREATE TABLE IF NOT EXISTS dlq_audio (
+        dlq_id          VARCHAR PRIMARY KEY,
+        video_id        VARCHAR NOT NULL,
+        record_id       VARCHAR,
+        stage           VARCHAR NOT NULL,
+        reason_code     VARCHAR NOT NULL,
+        error_detail    VARCHAR,
+        raw_payload     JSON,
+        provenance      {provenance_struct},
+        failed_at       TIMESTAMP NOT NULL,
+        attempts        INTEGER NOT NULL DEFAULT 0,
+        status          VARCHAR NOT NULL DEFAULT 'open'
+    )
+    """
     conn.execute(audio_segment_table)
-
+    conn.execute(dlq_audio_table)
 
 def connect(db_path) -> duckdb.DuckDBPyConnection:
     conn: duckdb.DuckDBPyConnection = duckdb.connect(str(db_path))
@@ -46,18 +61,25 @@ def insert_rows(conn: duckdb.DuckDBPyConnection, table: str, rows: list[dict]) -
     values = [[r[c] for c in cols] for r in rows]
     conn.executemany(sql, values)
 
+def overwrite_video_tables(conn: duckdb.DuckDBPyConnection, video_id: str, tables: dict[str, list[dict]]) -> None:
+    try:
+        conn.begin()
+        for table, rows in tables.items():
+            conn.execute(f"DELETE FROM {table} WHERE video_id=?", [video_id])
+            if len(rows) > 0:
+                insert_rows(conn, table, rows)
+                conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
 
 def overwrite_video(
     conn: duckdb.DuckDBPyConnection, table: str, video_id: str, rows: list[dict]
 ) -> None:
-    conn.begin()
-    try:
-        conn.execute(f"DELETE FROM {table} WHERE video_id = ?", [video_id])
-        insert_rows(conn, table, rows)
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
+    tables = {table: rows}
+    overwrite_video_tables(conn, video_id, tables)
+
 
 
 def export_parquet(
@@ -75,3 +97,4 @@ def export_parquet(
         [video_id],
     )
     return path
+
