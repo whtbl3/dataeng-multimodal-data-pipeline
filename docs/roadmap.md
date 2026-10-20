@@ -4,7 +4,7 @@
 |---|---|---|---|
 | 1 | Walking skeleton: `talk-align audio` → Whisper → `audio_segments` (id tất định, provenance) trong DuckDB → `talk-align export` → Parquet; 12 test trên fixture (`pytest` + `ruff` xanh; chưa có `make check`) | Implemented | — |
 | 2 | Audio contract + `dlq_audio`: reason_code, bỏ im lặng, cắt `t_end`, `quality_flag`, Pydantic contract, ghi 2 bảng trong 1 transaction, export cả `dlq_audio.parquet`; 37 test | Implemented | — |
-| 3 | Frame lane: scene change + keyframe t=0, `t_end = LEAD`, gộp `min_duration` | Planned | — |
+| 3 | Frame lane: scene change (1 fps, 0.15) + keyframe t=0, `t_end = LEAD`, gộp `min_duration`, keyframe PNG giữa slide; `talk-align frames` → 12 slide trên `lakehouse`; 45 test. Chưa ghi DuckDB (cần OCR, #4) | Implemented | — |
 | 4 | OCR + `quality_score` của slide + `dlq_frame` | Planned | — |
 | 5 | Align: overlap join, tie-break, nearest, `align_gap_*` | Planned | — |
 | 6 | Bảng `runs` + report (DLQ rate, phân phối align_gap, nearest %) | Planned | — |

@@ -84,13 +84,18 @@ quality_flag, keyframe_path, raw_payload, provenance`
   `t_end = LEAD(t_start)`; slide cuối thì `t_end` = duration (ffprobe).
 - Mốc cách mốc kế < `min_duration` (1.5 s) là chuyển cảnh: bỏ mốc đó, slide trước kéo
   dài tới mốc kế, đếm `merged_transitions`. Không vào DLQ, không mất slide nào.
+  Mốc cuối so với `duration` (fade về đen cuối video bị gộp). Mốc `0.0` không bao giờ bị
+  bỏ; mốc cách `0.0` < `min_duration` thì bỏ mốc đó. Bất biến: slide lát kín
+  `[0, duration)` và mọi slide dài ≥ `min_duration`.
 - `text`: chữ OCR của các box đã lọc, sắp từ trên xuống, trái sang phải.
 - Lọc box rác trước khi tính điểm: dưới `min_box_chars` (3) ký tự hoặc thấp hơn
   `min_box_height_ratio` chiều cao frame (logo, số trang).
 - `quality_score = Σ(confidence × số ký tự) / Σ(số ký tự)` trên các box đã lọc.
   Ngưỡng quarantine: **calibrate ở lần chạy đầu từ phân phối điểm**, tạm dùng 0.3.
 - `raw_payload`: JSON mọi box OCR (kể cả box bị lọc) với tọa độ, chữ, confidence.
-- `keyframe_path`: `data/keyframes/<video_id>/<slide_id>.png`.
+- `keyframe_path`: `data/keyframes/<video_id>/<slide_id>.png`, cắt ở **giữa** slide
+  (`(t_start + t_end) / 2`), vì mốc chỉ chính xác 1 s nên tại `t_start` fade có thể chưa
+  xong. Mỗi lần chạy xóa `data/keyframes/<video_id>/` rồi ghi lại (không để ảnh cũ).
 - Slide OCR không đọc được chữ nào vẫn là nội dung thật (vd slide chỉ có ảnh): giữ với
   `text=""`, `quality_score=0`, `quarantine`. Không đưa vào DLQ, vì mất slide thì audio
   ghép nhầm sang slide bên cạnh.

@@ -385,6 +385,41 @@ lấy mẫu 1 fps:   > 0.3 : 9 mốc  [5, 13, 14, 20, 39, 40, 83, 91, 344]
 - Bài học: ngưỡng trong spec là giả định; **đo phân phối trên dữ liệu thật trước khi
   code** (ffmpeg `metadata=print` in `lavfi.scene_score` từng frame).
 
+## 14. Bài học khi làm roadmap #3 (2026-10-19)
+
+### ffmpeg
+- `showinfo` ghi vào log → đọc `result.stderr` (stdout rỗng). **Không** thêm
+  `-loglevel error`: `showinfo` log ở mức info, `-loglevel error` cho ra `[]` mà không báo
+  lỗi gì.
+- Cắt 1 ảnh: `-ss <t>` đặt **trước** `-i` để nhảy thẳng tới t (nhanh), `-frames:v 1`.
+- `probe_duration` chuyển sang `media.py`: hai lane độc lập, không lane nào import lane kia.
+
+### Gộp mốc
+```
+mốc   kế       khoảng   kết quả
+5.0   6.0      1.0      bỏ (fade)
+13.0  14.0     1.0      bỏ
+39.0  40.0     1.0      bỏ
+344.0 344.561  0.561    bỏ (so với duration: fade về đen cuối)
+→ 16 mốc thô → 12 slide, merged_transitions = 4
+```
+- Test `[0.0, 1.0, 10.0]` từng được điền theo output của code (`[0, 1, 10]`, slide đầu
+  dài 1 s). Bất biến "mọi slide ≥ min_duration" lộ ra lỗ: `0.0` luôn được giữ mà không
+  kiểm tra khoảng cách. Sửa: mốc cách `0.0` < `min_duration` thì bỏ mốc đó.
+- Hai bất biến của frame lane: slide lát kín `[0, duration)` (từng cặp liền nhau
+  `a.t_end == b.t_start`, `itertools.pairwise`), và mọi slide ≥ `min_duration`.
+- `@dataclass`: dòng không có type hint (`scene_threshold = 0.15`) **không phải field**:
+  `asdict` bỏ qua, constructor không nhận → provenance thiếu tham số mà không lỗi.
+
+### Keyframe
+- Lấy ở giữa slide: 12/12 ảnh rõ, không ảnh nào chồng hình do fade.
+- Partition overwrite áp dụng cho file: xóa `data/keyframes/<video_id>/` trước khi ghi,
+  nếu không ảnh của lần chạy với tham số cũ (vd mốc 150 khi ngưỡng 0.15) còn nằm lại và
+  OCR đọc nhầm.
+- Hạn chế để ý ở #4/#9: slide có bullet hiện dần (`254s`, ảnh ở 297 s chưa đủ bullet) và
+  đổi nội dung trong cùng slide (`40s`, `91s` chỉ còn "Cons"): một ảnh giữa slide không
+  chứa hết chữ của slide đó.
+
 ## Câu hỏi tự kiểm tra
 
 | Câu hỏi | Test kiểm tra |
@@ -404,6 +439,8 @@ lấy mẫu 1 fps:   > 0.3 : 9 mốc  [5, 13, 14, 20, 39, 40, 83, 91, 344]
 | Vì sao 2 bảng phải chung 1 transaction? | `test_failure_in_dlq_rolls_back_audio_too` |
 | Lần chạy mới hết lỗi thì dòng DLQ cũ đi đâu? | `test_rerun_without_errors_clears_old_dlq_rows` |
 | Replay 2 lần ra mấy dòng? | (roadmap #7) |
-| Slide 0.4 s do chuyển cảnh xử lý ra sao, vì sao không vào DLQ? | (roadmap #3) |
+| Slide 0.4 s do chuyển cảnh xử lý ra sao, vì sao không vào DLQ? | `test_spec_example`, `test_every_slide_is_at_least_min_duration` |
+| Mốc 0.0 quá gần mốc kế tiếp thì bỏ mốc nào? | `test_zero_is_never_dropped` |
+| Có đoạn video nào không thuộc slide nào không? | `test_slides_tile_the_whole_video` |
 | Slide không có chữ vào đâu, vì sao không vào DLQ? | (roadmap #4) |
 | Có dòng `nearest` trong `aligned` nghĩa là gì? | (roadmap #5) |
