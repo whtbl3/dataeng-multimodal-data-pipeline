@@ -19,9 +19,12 @@ from talk_align.frame_lane import (
     build_slide_spans,
     detect_scene_times,
     extract_keyframes,
+    ocr_keyframes,
     plan_keyframes,
 )
+
 from talk_align.media import probe_duration
+
 
 # def save_fixture_temp(video_id: str, raw_segments: list[dict], duration: float):
 #     fixture_dir =Path("tests/fixtures")
@@ -159,9 +162,9 @@ def main(argv=None):
         spans, metrics = build_slide_spans(times, duration, params.min_duration)
         planned = plan_keyframes(video_id, spans)
         extract_keyframes(video_path, video_id, planned)
-        for slide in planned:
-            print(slide["slide_id"], slide["t_start"], slide["t_end"], slide["keyframe_path"])
-        
+        raw_ocr = ocr_keyframes(planned)
+        for slide_id, r in raw_ocr.items():
+            print(slide_id, r["image_h"], len(r["boxes"]))
 
     return 0
 

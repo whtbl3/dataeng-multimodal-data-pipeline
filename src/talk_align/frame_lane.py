@@ -6,6 +6,8 @@ import subprocess
 from pathlib import Path
 
 from talk_align.config import KEYFRAME_DIR, FrameParams
+from PIL import Image
+from rapidocr_onnxruntime import RapidOCR
 
 
 def detect_scene_times(video_path: Path, params: FrameParams) -> list[float]:
@@ -134,3 +136,57 @@ def extract_keyframes(video_path: Path, video_id: str, planned: list[dict]) -> N
             str(slide["keyframe_path"]),
         ]
         subprocess.run(cmd, check=True)
+
+def ocr_keyframes(planned: list[dict]) -> dict[str, dict]:
+    """Run OCR on each slide's keyframe. Keeps every box (filtering happens later).
+
+    Input:  output of plan_keyframes (needs "slide_id", "keyframe_path")
+    Output: {"lakehouse_s_00000000": {"image_h": 720,
+                                      "boxes": [{"box": [[x, y], ...], "text": "...", "conf": 0.997}, ...]},
+             ...}
+    """
+    engine = RapidOCR()  # load the model once, reuse for every image
+    raw_ocr: dict[str, dict] = {}
+    for slide in planned:
+        path = slide["keyframe_path"]
+        with Image.open(path) as img:
+            _width, height = img.size  # kept so later steps never need to reopen the image
+        result, _elapse = engine(str(path))
+        boxes = [
+            {
+                "box": [[float(x), float(y)] for x, y in box],
+                "text": text,
+                "conf": float(conf),
+            }
+            for box, text, conf in (result or [])  # None when the image has no text
+        ]
+        raw_ocr[slide["slide_id"]] = {"image_h": height, "boxes": boxes}
+    return raw_ocr
+
+def box_top(b: dict) -> float:
+    return min(p[1] for p in b["box"])
+
+
+def box_left(b: dict) -> float:
+    return min(p[0] for p in b["box"])
+
+
+def box_height(b: dict) -> float:
+    ys = [p[1] for p in b["box"]]
+    return max(ys) - min(ys)
+
+
+def clean_boxes(boxes: list[dict], image_h: int, params: FrameParams) -> list[dict]:
+    """Drop junk boxes, return the rest in reading order. Pure function.
+
+    Junk: fewer than min_box_chars characters after strip ('小'), or a box whose height
+    is a small share of the image (footer '©2022 Databricks...', 19/720 = 0.026).
+    Reading order: top to bottom, then left to right (two-column slides interleave).
+    """
+    kept = [
+        b
+        for b in boxes
+        if len(b["text"].strip()) >= params.min_box_chars
+        and box_height(b) / image_h >= params.min_box_height_ratio
+    ]
+    return sorted(kept, key=lambda b: (box_top(b), box_left(b)))

@@ -7,14 +7,27 @@ from pathlib import Path
 import pytest
 
 from talk_align.config import FrameParams
-from talk_align.frame_lane import build_slide_spans, plan_keyframes
+from talk_align.frame_lane import (
+    box_height,
+    build_slide_spans,
+    clean_boxes,
+    make_slide_id,
+    plan_keyframes,
+)
 
 # tests/test_frame_lane.py
 SCENES = Path(__file__).parent / "fixtures" / "scenes_lakehouse.json"
+OCR = Path(__file__).parent / "fixtures" / "ocr_lakehouse.json"
+
+
+def ocr(slide_id):
+    return json.loads(OCR.read_text())["ocr"][slide_id]
 
 
 def test_frame_params_are_all_fields():
-    assert set(asdict(FrameParams())) == {"sample_fps", "scene_threshold", "min_duration"}
+    assert set(asdict(FrameParams())) == {
+        "sample_fps", "scene_threshold", "min_duration", "min_box_chars", "min_box_height_ratio",
+    }
 
 def test_spec_example():                       # đúng ví dụ trong spec §3 / learning-notes §3
     spans, m = build_slide_spans([0.0, 12.0, 300.0, 300.4, 330.2], 344.561, 1.5)
@@ -55,3 +68,26 @@ def test_plan_keyframes_adds_id_midpoint_and_path():
     assert p["slide_id"] == "v_s_00016150"
     assert p["keyframe_at"] == pytest.approx(18.075)
     assert str(p["keyframe_path"]).endswith("keyframes/v/v_s_00016150.png")
+
+def test_box_height_is_max_y_minus_min_y():
+    b = {"box": [[934.0, 203.0], [1090.0, 206.0], [1089.0, 256.0], [933.0, 253.0]], "text": "x", "conf": 0.9}
+    assert box_height(b) == 53.0          # 256 − 203
+
+
+def test_clean_slide_keeps_everything_in_order():
+    r = ocr("lakehouse_s_00020000")
+    kept = clean_boxes(r["boxes"], r["image_h"], FrameParams())
+    assert [b["text"].strip() for b in kept] == ["1980s", "Businesses need", "more than", "relational", "databases"]
+
+def test_footer_and_short_junk_are_dropped():
+    r = ocr("lakehouse_s_00091000")
+    kept = clean_boxes(r["boxes"], r["image_h"], FrameParams())
+    texts = [b["text"] for b in kept]
+    assert len(kept) == 10
+    assert "小" not in texts
+    assert not any("Databricks Inc" in t for t in texts)
+    assert texts[0] == "Data Lakes"
+
+def test_boundary_ratio():                    # đúng 0.03 → giữ hay bỏ? quyết định "<" hay "<=" giống quality_flag
+    b = {"box": [[0, 0], [100, 0], [100, 21.6], [0, 21.6]], "text": "abc", "conf": 0.9}   # 21.6 / 720 = 0.03
+    assert len(clean_boxes([b], 720, FrameParams())) == True

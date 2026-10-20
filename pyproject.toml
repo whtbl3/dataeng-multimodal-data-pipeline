@@ -10,6 +10,7 @@ dependencies = [
     "faster-whisper>=1.2.1",
     "pyarrow>=26.0.0",
     "pydantic>=2.14.1",
+    "rapidocr-onnxruntime>=1.4.4",
 ]
 
 [project.scripts]
