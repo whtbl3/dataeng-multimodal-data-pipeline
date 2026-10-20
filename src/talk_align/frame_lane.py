@@ -1,10 +1,11 @@
 """Frame lane (step ②): scene change keyframes -> OCR -> slides rows. Roadmap #3-4."""
 
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
-from talk_align.config import FrameParams
+from talk_align.config import KEYFRAME_DIR, FrameParams
 
 
 def detect_scene_times(video_path: Path, params: FrameParams) -> list[float]:
@@ -83,3 +84,53 @@ def build_slide_spans(
         spans.append({"t_start": t, "t_end": t_end})
 
     return spans, {"marks_in": len(marks), "merged_transitions": merged, "slides": len(spans)}
+
+def make_slide_id(video_id: str, t_start: float) -> str:
+    """Deterministic slide id from the start time in ms (round, never int).
+
+    Input:  "lakehouse", 16.15
+    Output: "lakehouse_s_00016150"
+    """
+    return f"{video_id}_s_{round(t_start * 1000):08d}"
+
+
+def plan_keyframes(video_id: str, spans: list[dict]) -> list[dict]:
+    """Add slide_id, keyframe_at and keyframe_path to each span. Pure function.
+
+    Input:  "lakehouse", [{"t_start": 0.0, "t_end": 6.0}, ...]
+    Output: [{"t_start": 0.0, "t_end": 6.0, "slide_id": "lakehouse_s_00000000",
+              "keyframe_at": 3.0,
+              "keyframe_path": Path("data/keyframes/lakehouse/lakehouse_s_00000000.png")}, ...]
+    """
+    planned = []
+    for span in spans:
+        slide_id = make_slide_id(video_id, span["t_start"])
+        planned.append({
+            **span,
+            "slide_id": slide_id,
+            # middle of the slide: at t_start a fade may still be running (marks are 1 s apart)
+            "keyframe_at": (span["t_start"] + span["t_end"]) / 2,
+            "keyframe_path": KEYFRAME_DIR / video_id / f"{slide_id}.png",
+        })
+    return planned
+
+
+def extract_keyframes(video_path: Path, video_id: str, planned: list[dict]) -> None:
+    """Write one PNG per slide. Replaces this video's keyframe folder (no stale files).
+
+    Input:  Path("data/input/lakehouse.mp4"), "lakehouse", output of plan_keyframes
+    Output: None; data/keyframes/lakehouse/<slide_id>.png for each slide
+    """
+    out_dir = KEYFRAME_DIR / video_id
+    # partition overwrite on disk: images of an older run (other params) must not survive
+    shutil.rmtree(out_dir, ignore_errors=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for slide in planned:
+        cmd = [
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+            "-ss", str(slide["keyframe_at"]),       # before -i: fast seek
+            "-i", str(video_path),
+            "-frames:v", "1",
+            str(slide["keyframe_path"]),
+        ]
+        subprocess.run(cmd, check=True)
