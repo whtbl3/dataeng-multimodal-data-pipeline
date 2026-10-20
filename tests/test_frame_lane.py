@@ -52,7 +52,7 @@ def test_slides_tile_the_whole_video():        # không hở, không chồng lê
     for a, b in itertools.pairwise(spans):         # từng cặp slide liền nhau
         assert a["t_end"] == b["t_start"]
 
-def test_missing_zero_is_added_and_input_is_cleaned():  
+def test_missing_zero_is_added_and_input_is_cleaned():
     spans, _ = build_slide_spans([20.0, 5.0, 5.0], 30.0, 1.5)      # thiếu 0, chưa sắp xếp, trùng
     assert [s["t_start"] for s in spans] == [0.0, 5.0, 20.0]
 
@@ -163,3 +163,42 @@ def test_running_twice_gives_the_same_slide_rows():
     d = fixture()
     assert build_slide_rows(d["video_id"], d["slides"], d["ocr"], FrameParams(), PROVENANCE) == \
            build_slide_rows(d["video_id"], d["slides"], d["ocr"], FrameParams(), PROVENANCE)
+
+from talk_align.frame_lane import ocr_keyframes  # gộp vào dòng import frame_lane có sẵn
+
+
+def test_corrupt_keyframe_goes_to_dlq(tmp_path):
+    bad = tmp_path / "bad.png"
+    bad.write_text("not an image")
+    raw = ocr_keyframes([{"slide_id": "v_s_00000000", "keyframe_path": bad}])
+    assert raw["v_s_00000000"]["reason_code"] == "CORRUPT_KEYFRAME"
+    assert raw["v_s_00000000"]["stage"] == "ocr"
+
+
+def test_missing_keyframe_goes_to_dlq(tmp_path):
+    raw = ocr_keyframes([{"slide_id": "v_s_00000000", "keyframe_path": tmp_path / "nope.png"}])
+    assert raw["v_s_00000000"]["reason_code"] == "CORRUPT_KEYFRAME"
+
+
+def test_error_entry_becomes_dlq_row_and_good_slides_survive():
+    d = fixture()
+    ocr = dict(d["ocr"])
+    ocr["lakehouse_s_00091000"] = {
+        "error": "UnidentifiedImageError: x", "reason_code": "CORRUPT_KEYFRAME", "stage": "ocr",
+    }
+    ok, dlq, m = build_slide_rows(d["video_id"], d["slides"], ocr, FrameParams(), PROVENANCE)
+    assert len(ok) == 3 and len(dlq) == 1
+    assert dlq[0]["dlq_id"] == "dlq_ocr_lakehouse_s_00091000"
+    assert dlq[0]["record_id"] == "lakehouse_s_00091000"
+    assert dlq[0]["reason_code"] == "CORRUPT_KEYFRAME"
+    assert m["slides_in"] == m["ok"] + m["dlq"]
+
+
+def test_dlq_frame_row_has_the_eleven_columns():
+    d = fixture()
+    ocr = dict(d["ocr"])
+    ocr["lakehouse_s_00020000"] = {"error": "x", "reason_code": "OCR_FAILED", "stage": "ocr"}
+    _, dlq, _ = build_slide_rows(d["video_id"], d["slides"], ocr, FrameParams(), PROVENANCE)
+    assert set(dlq[0]) == {"dlq_id", "video_id", "record_id", "stage", "reason_code", "error_detail",
+                           "raw_payload", "provenance", "failed_at", "attempts", "status"}
+    assert dlq[0]["failed_at"] == PROVENANCE["processed_at"]
