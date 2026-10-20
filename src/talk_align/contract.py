@@ -30,3 +30,20 @@ def reason_code_for(err: ValidationError) -> str:
             return "SCORE_OUT_OF_RANGE"
         else:
             return "SCHEMA_VIOLATION"
+
+class SlideRow(BaseModel):
+    """One row of the slides table (spec §4). Text may be empty: image-only slide."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    video_id: str
+    slide_id: str
+    modality: Literal["frame"]
+    text: str
+    t_start: float = Field(ge=0)
+    t_end: float
+    quality_score: float = Field(ge=0, le=1)
+    quality_flag: Literal["ok", "quarantine"]
+    keyframe_path: str
+    raw_payload: str
+    provenance: dict

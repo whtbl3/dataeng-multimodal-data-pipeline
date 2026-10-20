@@ -9,11 +9,15 @@ import pytest
 from talk_align.config import FrameParams
 from talk_align.frame_lane import (
     box_height,
+    build_slide_rows,
     build_slide_spans,
     clean_boxes,
-    make_slide_id,
     plan_keyframes,
+    slide_flag,
+    slide_quality,
+    slide_text,
 )
+from tests.test_audio_lane import PROVENANCE
 
 # tests/test_frame_lane.py
 SCENES = Path(__file__).parent / "fixtures" / "scenes_lakehouse.json"
@@ -91,3 +95,71 @@ def test_footer_and_short_junk_are_dropped():
 def test_boundary_ratio():                    # đúng 0.03 → giữ hay bỏ? quyết định "<" hay "<=" giống quality_flag
     b = {"box": [[0, 0], [100, 0], [100, 21.6], [0, 21.6]], "text": "abc", "conf": 0.9}   # 21.6 / 720 = 0.03
     assert len(clean_boxes([b], 720, FrameParams())) == True
+
+def tb(text, conf):                                   # box giả, chỉ cần text và conf
+    return {"box": [[0, 0], [1, 0], [1, 50], [0, 50]], "text": text, "conf": conf}
+
+
+def test_slide_quality_is_weighted_by_characters():   # đúng ví dụ trong learning-notes §3
+    kept = [
+        tb("Lakehouse Architecture", 0.97),           # 22 ký tự
+        tb("• Object storage + table format", 0.91),  # 31 ký tự (• tính là 1)
+        tb("• Iceberg / Deita", 0.58),                # 17 ký tự
+    ]
+    # (22×0.97 + 31×0.91 + 17×0.58) / (22+31+17) = 59.41 / 70 = 0.8487
+    assert slide_quality(kept) == pytest.approx(0.8487, abs=1e-3)
+
+
+def test_slide_text_strips_and_joins_lines():
+    assert slide_text([tb(" Transaction support", 0.9), tb("BI Support ", 0.9)]) == "Transaction support\nBI Support"
+
+
+def test_empty_slide_is_kept_as_quarantine():
+    assert slide_text([]) == ""
+    assert slide_quality([]) == 0.0
+    assert slide_flag(slide_quality([])) == "quarantine"
+
+
+def test_real_slide_scores_ok():
+    r = ocr("lakehouse_s_00091000")
+    kept = clean_boxes(r["boxes"], r["image_h"], FrameParams())
+    assert slide_flag(slide_quality(kept)) == "ok"
+    assert slide_text(kept).startswith("Data Lakes\nCons:")
+
+def fixture():
+    return json.loads(OCR.read_text())
+
+
+def test_build_slide_rows_on_fixture():
+    d = fixture()
+    ok, dlq, m = build_slide_rows(d["video_id"], d["slides"], d["ocr"], FrameParams(), PROVENANCE)
+    assert len(ok) == 4 and dlq == []
+    assert set(ok[0]) == {
+        "video_id", "slide_id", "modality", "text", "t_start", "t_end",
+        "quality_score", "quality_flag", "keyframe_path", "raw_payload", "provenance",
+    }
+    by_id = {r["slide_id"]: r for r in ok}
+    assert by_id["lakehouse_s_00340000"]["text"] == "databricks"
+    assert (m["boxes_in"], m["boxes_dropped"]) == (28, 3)     # 5+12+10+1; 小 + 2 footer
+
+
+def test_raw_payload_keeps_dropped_boxes():
+    d = fixture()
+    ok, _, _ = build_slide_rows(d["video_id"], d["slides"], d["ocr"], FrameParams(), PROVENANCE)
+    row = next(r for r in ok if r["slide_id"] == "lakehouse_s_00091000")
+    assert len(json.loads(row["raw_payload"])["boxes"]) == 12  # 12 thô, không phải 10 đã lọc
+
+
+def test_slide_with_no_boxes_is_kept_as_quarantine():
+    slide = {"slide_id": "v_s_00000000", "t_start": 0.0, "t_end": 5.0, "keyframe_path": "x.png"}
+    ok, dlq, m = build_slide_rows(
+        "v", [slide], {"v_s_00000000": {"image_h": 720, "boxes": []}}, FrameParams(), PROVENANCE
+    )
+    assert (ok[0]["text"], ok[0]["quality_score"], ok[0]["quality_flag"]) == ("", 0.0, "quarantine")
+    assert dlq == [] and m["empty_text"] == 1
+
+
+def test_running_twice_gives_the_same_slide_rows():
+    d = fixture()
+    assert build_slide_rows(d["video_id"], d["slides"], d["ocr"], FrameParams(), PROVENANCE) == \
+           build_slide_rows(d["video_id"], d["slides"], d["ocr"], FrameParams(), PROVENANCE)

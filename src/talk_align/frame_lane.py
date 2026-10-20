@@ -1,13 +1,16 @@
 """Frame lane (step ②): scene change keyframes -> OCR -> slides rows. Roadmap #3-4."""
 
+import json
 import re
 import shutil
 import subprocess
 from pathlib import Path
 
-from talk_align.config import KEYFRAME_DIR, FrameParams
 from PIL import Image
 from rapidocr_onnxruntime import RapidOCR
+
+from talk_align.config import KEYFRAME_DIR, SLIDE_QUARANTINE_THRESHOLD, FrameParams
+from talk_align.contract import SlideRow
 
 
 def detect_scene_times(video_path: Path, params: FrameParams) -> list[float]:
@@ -190,3 +193,84 @@ def clean_boxes(boxes: list[dict], image_h: int, params: FrameParams) -> list[di
         and box_height(b) / image_h >= params.min_box_height_ratio
     ]
     return sorted(kept, key=lambda b: (box_top(b), box_left(b)))
+
+def slide_text(kept: list[dict]) -> str:
+    """Join the kept boxes into the slide text, one line per box. Pure function.
+
+    Input:  [{"text": " Transaction support", ...}, {"text": "BI Support ", ...}]
+    Output: "Transaction support\nBI Support"
+    """
+    return "\n".join(b["text"].strip() for b in kept)
+
+
+def slide_quality(kept: list[dict]) -> float:
+    """Confidence averaged by character count: how much of the slide text is trustworthy.
+
+    Input:  [("Lakehouse Architecture", 0.97), ("• Object storage + table format", 0.91),
+             ("• Iceberg / Deita", 0.58)] as boxes
+    Output: (22*0.97 + 31*0.91 + 17*0.58) / 70 = 0.8487
+            0.0 when there is no text (image-only slide), never ZeroDivisionError
+    """
+    total_chars = sum(len(b["text"].strip()) for b in kept)
+    if total_chars == 0:
+        return 0.0
+    weighted = sum(b["conf"] * len(b["text"].strip()) for b in kept)
+    return weighted / total_chars
+
+
+def slide_flag(score: float) -> str:
+    """'quarantine' below SLIDE_QUARANTINE_THRESHOLD, else 'ok'. The slide is kept either way."""
+    return "quarantine" if score < SLIDE_QUARANTINE_THRESHOLD else "ok"
+
+def build_slide_rows(
+    video_id: str,
+    planned: list[dict],
+    raw_ocr: dict[str, dict],
+    params: FrameParams,
+    provenance: dict,
+) -> tuple[list[dict], list[dict], dict]:
+    """Turn planned slides + raw OCR into slides rows. Pure function.
+
+    Input:  "lakehouse",
+            [{"slide_id": "lakehouse_s_00091000", "t_start": 91.0, "t_end": 150.0,
+              "keyframe_path": Path(...)}, ...],
+            {"lakehouse_s_00091000": {"image_h": 720, "boxes": [...12 boxes...]}, ...}
+    Output: (ok_rows, dlq_rows, metrics); one row per slide, image-only slides kept as
+            text="", quality_score=0.0, quarantine. dlq_rows stays [] until STEP 6.
+    """
+    ok_rows: list[dict] = []
+    dlq_rows: list[dict] = []
+    metrics = {"slides_in": len(planned), "boxes_in": 0, "boxes_dropped": 0, "empty_text": 0}
+
+    for slide in planned:
+        r = raw_ocr[slide["slide_id"]]
+        kept = clean_boxes(r["boxes"], r["image_h"], params)
+        metrics["boxes_in"] += len(r["boxes"])
+        metrics["boxes_dropped"] += len(r["boxes"]) - len(kept)
+
+        text = slide_text(kept)
+        score = slide_quality(kept)
+        if text == "":
+            metrics["empty_text"] += 1
+
+        row = {
+            "video_id": video_id,
+            "slide_id": slide["slide_id"],
+            "modality": "frame",
+            "text": text,
+            "t_start": slide["t_start"],
+            "t_end": slide["t_end"],
+            "quality_score": score,
+            "quality_flag": slide_flag(score),
+            "keyframe_path": str(slide["keyframe_path"]),   # Path -> str for DuckDB / JSON
+            # ALL boxes, dropped ones too: re-filter later without running OCR again
+            "raw_payload": json.dumps(r, ensure_ascii=False),
+            "provenance": provenance,
+        }
+        SlideRow.model_validate(row)   # STEP 6 turns a ValidationError into a dlq_frame row
+        ok_rows.append(row)
+
+    metrics["ok"] = len(ok_rows)
+    metrics["dlq"] = len(dlq_rows)
+    metrics["quarantined"] = sum(1 for row in ok_rows if row["quality_flag"] == "quarantine")
+    return ok_rows, dlq_rows, metrics

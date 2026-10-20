@@ -22,9 +22,7 @@ from talk_align.frame_lane import (
     ocr_keyframes,
     plan_keyframes,
 )
-
 from talk_align.media import probe_duration
-
 
 # def save_fixture_temp(video_id: str, raw_segments: list[dict], duration: float):
 #     fixture_dir =Path("tests/fixtures")

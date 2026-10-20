@@ -43,3 +43,4 @@ class FrameParams:
 
 
 KEYFRAME_DIR = DATA_DIR / "keyframes"
+SLIDE_QUARANTINE_THRESHOLD = 0.3
