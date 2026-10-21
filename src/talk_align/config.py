@@ -17,6 +17,7 @@ OUT_DIR = DATA_DIR / "out"
 WORK_DIR.mkdir(parents=True, exist_ok=True)
 
 QUARANTINE_THRESHOLD = 0.3
+WEAK_MATCH_RATIO = 0.5  # align_gap_ratio above this -> weak match (learning-notes §8)
 
 
 @dataclass(frozen=True)

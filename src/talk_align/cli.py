@@ -197,9 +197,9 @@ def main(argv=None):
 
     elif args.command == "align":
         conn = store.connect(db_path=DB_PATH)
-        rows = align_video(conn, args.video_id)
+        rows, metrics = align_video(conn, args.video_id)
         conn.close()
-        print(len(rows))
+        print(metrics)
 
     return 0
 

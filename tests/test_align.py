@@ -23,6 +23,16 @@ def put_slides(con, video_id, spans):  # spans = [(t_start, t_end), ...]
     store.overwrite_video_tables(con, video_id, {"slides": ok, "dlq_frame": []})
 
 
+def align(spans_audio, spans_slides):
+    """Build a tiny in-memory video 'v' and align it."""
+    con = store.connect(":memory:")
+    put_audio(con, "v", spans_audio)
+    put_slides(con, "v", spans_slides)
+    rows, metrics = align_video(con, "v")
+    con.close()
+    return rows, metrics
+
+
 # STEP 1: helpers
 
 
@@ -39,11 +49,7 @@ def test_helpers_put_rows():
 
 
 def test_touching_intervals_do_not_overlap():
-    con = store.connect(":memory:")
-    put_audio(con, "v", [(6.0, 10.0)])
-    put_slides(con, "v", [(0.0, 6.0), (6.0, 14.0)])
-    rows = align_video(con, "v")
-    con.close()
+    rows, _ = align([(6.0, 10.0)], [(0.0, 6.0), (6.0, 14.0)])
     # [0,6) only touches at 6: score 6 - 6 = 0 -> loses to [6,14) with 4
     assert [(r["slide_id"], r["match_type"]) for r in rows] == [
         ("v_s_00006000", "overlap")
@@ -55,7 +61,7 @@ def test_other_videos_are_not_joined():
     put_audio(con, "v", [(1.0, 3.0)])
     put_slides(con, "v", [(0.0, 10.0)])
     put_slides(con, "w", [(0.0, 10.0)])  # same times, other video
-    rows = align_video(con, "v")
+    rows, _ = align_video(con, "v")
     con.close()
     assert [r["slide_id"] for r in rows] == ["v_s_00000000"]
 
@@ -64,31 +70,21 @@ def test_other_videos_are_not_joined():
 
 
 def test_crossing_segment_takes_the_bigger_overlap():
-    con = store.connect(":memory:")
-    put_audio(con, "v", [(5.0, 13.0)])
-    put_slides(con, "v", [(0.0, 6.0), (6.0, 14.0)])
-    rows = align_video(con, "v")
-    con.close()
+    rows, _ = align([(5.0, 13.0)], [(0.0, 6.0), (6.0, 14.0)])
     # [0,6): 6 - 5 = 1  ·  [6,14): 13 - 6 = 7  -> 7 wins
     assert [(r["slide_id"], r["overlap_s"]) for r in rows] == [("v_s_00006000", 7.0)]
 
 
 def test_tie_goes_to_the_later_slide():  # spec / learning-notes §8 example
-    con = store.connect(":memory:")
-    put_audio(con, "v", [(745.0, 755.0)])
-    put_slides(con, "v", [(721.0, 750.0), (750.0, 780.0)])
-    rows = align_video(con, "v")
-    con.close()
-    # 5 s each side -> tie -> the slide that starts LATER
+    rows, _ = align([(745.0, 755.0)], [(721.0, 750.0), (750.0, 780.0)])
     assert [r["slide_id"] for r in rows] == ["v_s_00750000"]
 
 
 def test_each_segment_appears_once():
-    con = store.connect(":memory:")
-    put_audio(con, "v", [(1.0, 5.0), (5.0, 13.0), (13.0, 20.0)])
-    put_slides(con, "v", [(0.0, 6.0), (6.0, 14.0), (14.0, 30.0)])
-    ids = [r["segment_id"] for r in align_video(con, "v")]
-    con.close()
+    rows, _ = align(
+        [(1.0, 5.0), (5.0, 13.0), (13.0, 20.0)], [(0.0, 6.0), (6.0, 14.0), (14.0, 30.0)]
+    )
+    ids = [r["segment_id"] for r in rows]
     assert len(ids) == len(set(ids)) == 3
 
 
@@ -96,11 +92,10 @@ def test_each_segment_appears_once():
 
 
 def test_segment_in_a_gap_goes_to_the_nearest_slide():
-    con = store.connect(":memory:")
-    put_audio(con, "v", [(12.0, 14.0)])
-    put_slides(con, "v", [(0.0, 10.0), (20.0, 30.0)])  # slide [10, 20) is missing
-    r = align_video(con, "v")[0]
-    con.close()
+    rows, _ = align(
+        [(12.0, 14.0)], [(0.0, 10.0), (20.0, 30.0)]
+    )  # slide [10, 20) is missing
+    r = rows[0]
     # [0,10): 10 - 12 = -2 (2 s away)  ·  [20,30): 14 - 20 = -6 (6 s away)
     assert (
         r["slide_id"],
@@ -116,27 +111,45 @@ def test_segment_in_a_gap_goes_to_the_nearest_slide():
 
 
 def test_nearest_tie_goes_to_the_later_slide():  # 4 s on both sides
-    con = store.connect(":memory:")
-    put_audio(con, "v", [(14.0, 16.0)])
-    put_slides(con, "v", [(0.0, 10.0), (20.0, 30.0)])
-    rows = align_video(con, "v")
-    con.close()
+    rows, _ = align([(14.0, 16.0)], [(0.0, 10.0), (20.0, 30.0)])
     assert rows[0]["slide_id"] == "v_s_00020000"
 
 
 def test_overlap_rows_have_no_nearest_distance():
-    con = store.connect(":memory:")
-    put_audio(con, "v", [(1.0, 3.0)])
-    put_slides(con, "v", [(0.0, 10.0)])
-    r = align_video(con, "v")[0]
-    con.close()
-    assert r["match_type"] == "overlap" and r["nearest_distance_s"] is None
+    rows, _ = align([(1.0, 3.0)], [(0.0, 10.0)])
+    assert rows[0]["match_type"] == "overlap" and rows[0]["nearest_distance_s"] is None
 
 
 def test_every_ok_segment_is_aligned():  # invariant: no segment disappears
-    con = store.connect(":memory:")
-    put_audio(con, "v", [(1.0, 3.0), (12.0, 14.0), (25.0, 27.0)])
-    put_slides(con, "v", [(0.0, 10.0), (20.0, 30.0)])
-    rows = align_video(con, "v")
-    con.close()
+    rows, _ = align(
+        [(1.0, 3.0), (12.0, 14.0), (25.0, 27.0)], [(0.0, 10.0), (20.0, 30.0)]
+    )
     assert [r["match_type"] for r in rows] == ["overlap", "nearest", "overlap"]
+
+
+# STEP 5: gap, weak match, slide quality flag
+
+
+def test_gap_for_the_spec_example():  # [745, 755) -> later slide, overlap 5
+    rows, m = align([(745.0, 755.0)], [(721.0, 750.0), (750.0, 780.0)])
+    # length 10, overlap 5 -> gap 5, ratio 5 / 10 = 0.5
+    assert (rows[0]["align_gap_s"], rows[0]["align_gap_ratio"]) == (5.0, 0.5)
+    assert m["weak"] == 0  # weak is "> 0.5", so exactly 0.5 is NOT weak
+
+
+def test_nearest_row_is_a_weak_match():
+    rows, m = align([(12.0, 14.0)], [(0.0, 10.0), (20.0, 30.0)])
+    # overlap_s 0 -> gap = whole length 2 -> ratio 1.0
+    assert rows[0]["align_gap_ratio"] == 1.0
+    assert (m["nearest"], m["weak"]) == (1, 1)
+
+
+def test_slide_quality_flag_is_carried_not_filtered():
+    con = store.connect(":memory:")
+    put_audio(con, "v", [(1.0, 3.0)])
+    put_slides(con, "v", [(0.0, 10.0)])
+    con.execute("UPDATE slides SET quality_flag = 'quarantine'")
+    rows, _ = align_video(con, "v")
+    con.close()
+    # quarantined slide is still matched (no fake nearest), the flag is just copied
+    assert len(rows) == 1 and rows[0]["slide_quality_flag"] == "quarantine"
