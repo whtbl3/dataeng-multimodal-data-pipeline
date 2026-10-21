@@ -523,6 +523,58 @@ câu         dài  overlap  gap_s  ratio
 slide "1980s"; "Data warehouses were designed..." ↔ "Data warehouse"; câu 88 s ("where
 structured, semi-structured...") vẫn ở slide "2000S" vì là phần tiếp của câu 83 s.
 
+## 17. Bài học khi làm roadmap #6 (2026-10-21)
+
+### Hai loại bảng
+```
+bảng dữ liệu (audio_segments, slides, aligned, dlq_*)   bảng lịch sử (runs)
+  = bảng trắng: chỉ trạng thái mới nhất                   = sổ nhật ký: mọi lần chạy
+  DELETE theo video_id + INSERT (partition overwrite)     INSERT OR REPLACE theo run_id (upsert)
+  sau 3 lần chạy: dữ liệu lần 3                           sau 3 lần chạy: 3 dòng
+```
+Nối nhau qua `run_id` (`provenance.run_id`, `aligned.run_id`). Dữ liệu cũ mất khỏi DB nhưng
+thông tin về lần chạy cũ còn trong `runs`; nội dung cũ còn trong `data/out/<run_id>/`.
+
+### Ghi `runs` hai lần
+- ① `running` trước khi chạy, ② trạng thái cuối sau khi chạy, cùng `run_id` nên ② thay ①.
+  Bị Ctrl+C / kill → dòng `running`, `finished_at` NULL còn lại: thấy được run bị đứt.
+- `KeyboardInterrupt` kế thừa `BaseException`, không phải `Exception`: `except Exception`
+  không bắt nó, chương trình dừng như người dùng muốn.
+- Mở connection, ghi, đóng ngay; không giữ DuckDB suốt 2 phút Whisper.
+
+### Điều phối
+- Tách logic khỏi `cli.py` (228 → 89 dòng) sang `pipeline.py` trước khi thêm `run`, chạy
+  lại để chắc hành vi không đổi (refactor). `pipeline.py` báo lỗi bằng exception
+  (`MissingInputError`), CLI đổi thành `parser.error`.
+- `build_provenance` nhận `run_id` từ ngoài: ba bước một `run_id`. `processed_at` vẫn khác
+  nhau theo lane (thời điểm lane bắt đầu).
+- Bắt `Exception` đúng ở lớp điều phối: lỗi được ghi (loại, thông báo, traceback), status
+  không còn `success`, exit code 1. Khác `build_rows`, nơi bắt rộng sẽ biến bug thành dòng
+  DLQ trông như dữ liệu.
+- `monkeypatch.setattr(pipeline, "run_audio", fake)` thay hàm trong một test; có tác dụng
+  vì `run_all` gọi qua tên trong module.
+
+### Chỉ số
+- DLQ rate trừ `dropped_silence` khỏi mẫu số (im lặng không thể lỗi). Mẫu số 0 → 0.0.
+- Lane không đo được → `None`, report in `-`; 0 nghĩa là "không lỗi", khác "không biết".
+- p95 thay vì trung bình / max: trên `lakehouse` 73 câu gap 0, 4 câu 1 s, 1 câu 2 s →
+  trung bình 0.08 (che lỗi), max 2.0 (một câu), p95 1.0. `quantile_cont` nội suy:
+  2 giá trị [0, 1] tại 0.95 → 0.95.
+- Warnings nói thẳng số nào xấu; ngưỡng là hằng số trong `config.py`.
+
+### Lỗi tìm ra khi làm
+- `overwrite_video_tables` (từ `f069f85`): `conn.commit()` nằm trong `if len(rows) > 0`
+  của vòng lặp → mọi bảng rỗng thì không commit, DELETE bị hủy khi đóng, dữ liệu cũ còn.
+  37 test cũ không bắt được; test mới mở lại file sau khi ghi đè bằng `[]`.
+- `code_version = 77da589-dirty` ở lần `run` đầu: chạy trước khi commit STEP 4. Lần sau
+  commit trước → `6e03ab6`, report không còn warning.
+- Truy vấn `runs` bằng `duckdb.connect` thẳng báo "Table runs does not exist": chỉ
+  `store.connect` chạy `create_schema`; bảng chỉ có sau lần `talk-align run` đầu.
+
+### Kết quả
+`talk-align run data/input/lakehouse.mp4` ~2m20s, status success, warnings none:
+78 câu, 12 slide, 0 DLQ, 0 nearest, 0 weak, p95 align_gap 1.0 s / 0.13.
+
 ## Câu hỏi tự kiểm tra
 
 | Câu hỏi | Test kiểm tra |
@@ -557,3 +609,11 @@ structured, semi-structured...") vẫn ở slide "2000S" vì là phần tiếp c
 | Có câu nào biến mất khi ghép không? | `test_every_ok_segment_is_aligned`, `test_each_segment_appears_once` |
 | Slide quarantine có bị bỏ khi ghép không? | `test_slide_quality_flag_is_carried_not_filtered` |
 | Frame lane chạy lại thì `aligned` cũ ra sao? | `test_aligned_rows_are_written_and_replaced` |
+| Audio lỗi thì frames có chạy không? Status là gì? | `test_audio_failure_does_not_stop_frames`, `test_both_lanes_failing_is_failed`, `test_align_failure_is_partial` |
+| Ba bước có dùng chung `run_id` không? | `test_all_lanes_ok_is_success` |
+| Chạy 2 lần thì bảng `runs` còn mấy dòng? | `test_runs_keep_history` |
+| Ctrl+C giữa chừng thì `runs` ghi gì? | `test_killed_run_stays_running` |
+| Vì sao DLQ rate trừ im lặng? Lane lỗi thì rate là gì? | `test_dlq_rate_excludes_silence`, `test_failed_lane_gives_none_not_zero` |
+| p95 tính thế nào? | `test_align_reports_gap_percentiles` |
+| Ghi đè bằng danh sách rỗng có xóa dữ liệu cũ không? | `test_overwrite_with_only_empty_tables_still_deletes` |
+| Report cảnh báo những gì? Đúng 5% nearest có cảnh báo không? | `test_many_nearest_rows_warn_about_frames`, `test_nearest_at_the_threshold_is_not_warned`, `test_dlq_reasons_are_listed` |

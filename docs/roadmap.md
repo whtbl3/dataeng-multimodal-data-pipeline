@@ -7,7 +7,7 @@
 | 3 | Frame lane: scene change (1 fps, 0.15) + keyframe t=0, `t_end = LEAD`, gộp `min_duration`, keyframe PNG giữa slide; `talk-align frames` → 12 slide trên `lakehouse`; 45 test. Chưa ghi DuckDB (cần OCR, #4) | Implemented | — |
 | 4 | OCR (`rapidocr_onnxruntime`) + lọc box rác + `quality_score` cân theo ký tự + `dlq_frame` (`CORRUPT_KEYFRAME`, `OCR_FAILED`); ghi `slides` + `dlq_frame`, export 4 bảng; 12 slide trên `lakehouse`; 64 test | Implemented | — |
 | 5 | Align: overlap join, tie-break, nearest, `align_gap_*`, `AlignedRow`, bảng `aligned` + export; `lakehouse`: 78 câu, 0 nearest, 0 weak, gap tối đa 2 s / 0.4; 78 test | Implemented | — |
-| 6 | Bảng `runs` + report (DLQ rate, phân phối align_gap, nearest %) | Planned | — |
+| 6 | `pipeline.py` + lệnh `run` (1 `run_id`, lane lỗi không chặn lane kia), bảng `runs` (upsert, ghi 2 lần), summary (DLQ rate, p50/p95 align_gap, nearest %), lệnh `report` + `report.md` có warnings; ~2m20s mỗi lần chạy `lakehouse`; 109 test | Implemented | — |
 | 7 | Replay DLQ: upsert, `attempts`, `status` | Planned | — |
 | 8 | `check-idempotent` + smoke test `@slow` trên video thật | Planned | — |
 | 9 | Calibrate ngưỡng quarantine của slide trên video thật, cập nhật spec | Planned | — |

@@ -170,12 +170,23 @@ nearest_distance_s, slide_quality_flag, run_id`
 - `metrics` (JSON): số dòng mỗi bảng, DLQ rate mỗi modality, `dropped_silence`,
   `clipped_t_end`, `merged_transitions`, số quarantine, p50/p95/max của `align_gap_s`
   và `align_gap_ratio`, số và % dòng `nearest`, số weak match.
+- Đã cài: `metrics = {"audio", "frames", "align", "summary"}`; lane lỗi giữ
+  `{"error", "traceback"}`, bị bỏ qua giữ `{"skipped"}`. `summary`: `dlq_rate_audio =
+  dlq / (segments_in − dropped_silence)`, `dlq_rate_frame = dlq / slides_in`, `nearest_pct`,
+  `p50/p95` (`quantile_cont`). Không đo được → `None` (report in `-`), không phải 0.
+- `status`: `running` (ghi lúc bắt đầu) → `success` | `partial` | `failed` (ghi lại cùng
+  `run_id` lúc kết thúc). Bị kill thì dòng `running` với `finished_at` NULL còn lại.
+- Chỉ lệnh `run` ghi `runs`; `audio`/`frames`/`align` riêng lẻ có `run_id` nhưng không ghi.
+- Report (`talk-align report <video_id>`, và `report.md` khi export) cảnh báo khi: lane lỗi
+  hoặc bị bỏ qua, run chưa kết thúc, DLQ rate > 0 (kèm số dòng theo `reason_code`),
+  `nearest_pct > 5`, có weak match, `p95 align_gap_s > 3`, `code_version` có `-dirty`.
 
 ### Cách ghi (xem ADR 0001)
 | Tình huống | Cách ghi |
 |---|---|
 | Chạy cả video | `DELETE ... WHERE video_id = ?` + `INSERT` cho mọi bảng của video đó, trong **1 transaction** |
 | Replay DLQ (từng dòng) | `INSERT OR REPLACE` theo PK, rồi `UPDATE dlq_* SET status = 'replayed'` |
+| Bảng `runs` (lịch sử) | `INSERT OR REPLACE` theo `run_id`, **không** DELETE theo `video_id`: mọi lần chạy đều giữ |
 
 MERGE khi chạy lại cả video để lại dòng "zombie" của lần chạy cũ (id theo `t_start` đổi
 khi model đổi), nên join bị fan-out mà không ai báo lỗi.
