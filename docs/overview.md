@@ -203,7 +203,7 @@ liệu gốc đó, cho đi qua lại bước kiểm tra, mà không phải chạ
 
 ---
 
-## Bước 11. Chứng minh chạy lại ra cùng kết quả (idempotency), roadmap #8, chưa làm
+## Bước 11. Chứng minh chạy lại ra cùng kết quả (idempotency), roadmap #8, đã làm
 
 **Vấn đề:** cả pipeline được thiết kế để "chạy lại bao nhiêu lần cũng ra cùng kết quả",
 nhưng đến giờ mới chỉ **tin** là như vậy, chưa **kiểm chứng** trên dữ liệu thật.
@@ -220,8 +220,9 @@ Bỏ qua những cột chắc chắn khác nhau giữa các lần chạy (`run_i
   câu khác).
 - Thêm một **smoke test** chạy cả pipeline trên video thật, tách riêng khỏi các test nhanh.
 
-**Có thể sẽ phát hiện ra:** những chỗ chưa thật sự tất định, ví dụ thứ tự các ô chữ OCR
-hoặc sai số float. Đó chính là mục đích của bước này.
+**Kết quả:** chạy `lakehouse` 2 lần cùng code → 5 bảng giống hệt (smoke test, 4 phút).
+Hai lần chạy khác commit chỉ khác ở `provenance.code_version`; thêm `--ignore code_version`
+thì giống hệt. Whisper, OCR, ghép đều tất định trên máy này.
 
 ---
 

@@ -7,7 +7,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from talk_align import pipeline, store
+from talk_align import idempotency, pipeline, store
 from talk_align.config import DB_PATH, OUT_DIR
 from talk_align.report import render_report
 
@@ -43,6 +43,21 @@ def build_parser() -> argparse.ArgumentParser:
 
     report = sub.add_parser("report", help="Print the report of the latest run")
     report.add_argument("video_id", help="ID of the video to report on")
+
+    check = sub.add_parser(
+        "check-idempotent", help="Compare two export dirs with EXCEPT both ways"
+    )
+    check.add_argument(
+        "dir1", type=Path, help="First export dir, e.g. data/out/<run_id>"
+    )
+    check.add_argument("dir2", type=Path, help="Second export dir")
+    check.add_argument(
+        "--ignore",
+        action="append",
+        default=[],
+        metavar="COLUMN",
+        help="Also ignore this column (repeatable), e.g. --ignore code_version",
+    )
     return parser
 
 
@@ -119,6 +134,15 @@ def main(argv=None) -> int:
         if found is None:
             parser.error(f"No run recorded for {args.video_id} (use talk-align run)")
         print(found[1])
+
+    elif args.command == "check-idempotent":
+        for d in (args.dir1, args.dir2):
+            if not d.is_dir():
+                parser.error(f"Not a directory: {d}")
+        ignore = idempotency.VOLATILE + tuple(args.ignore)
+        result = idempotency.compare_dirs(args.dir1, args.dir2, ignore)
+        print(idempotency.render_comparison(result, ignore))
+        return 0 if idempotency.is_identical(result) else 1
 
     elif args.command == "run":
         video_path = resolve_video(parser, args.video)

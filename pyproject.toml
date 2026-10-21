@@ -22,6 +22,8 @@ build-backend = "hatchling.build"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["slow: end-to-end on the real video (minutes); run with `pytest -m slow`"]
+addopts = "-m 'not slow'"
 
 [dependency-groups]
 dev = [

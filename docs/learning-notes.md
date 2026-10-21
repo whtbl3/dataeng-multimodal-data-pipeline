@@ -575,6 +575,24 @@ thông tin về lần chạy cũ còn trong `runs`; nội dung cũ còn trong `d
 `talk-align run data/input/lakehouse.mp4` ~2m20s, status success, warnings none:
 78 câu, 12 slide, 0 DLQ, 0 nearest, 0 weak, p95 align_gap 1.0 s / 0.13.
 
+## 18. Bài học khi làm roadmap #8 (2026-10-22)
+
+- So **tập dòng**, không so file: Parquet có metadata, row group, nén khác nhau.
+- `EXCEPT ALL` thay vì `EXCEPT`: `EXCEPT` bỏ trùng, 1 dòng so với 2 bản giống nhau ra 0
+  khác biệt; `EXCEPT ALL` ra 1. Phải chạy **hai chiều**: dir1 − dir2 = 0 vẫn có thể còn
+  dòng thừa ở dir2.
+- Cột thay đổi theo lần chạy nằm cả **trong struct**: `provenance.* EXCLUDE (run_id,
+  processed_at)` (DuckDB), cộng `run_id` của `aligned` và `failed_at` của DLQ.
+- Khi khác, so từng cột riêng để biết cột nào gây ra: lần chạy 2 (`6e03ab6`) và 3
+  (`3986be3`) khác đúng `provenance.code_version` ở 78 + 12 dòng; `--ignore code_version`
+  → giống hệt.
+- Smoke test chạy cả pipeline 2 lần (~4 phút) → đánh dấu `@pytest.mark.slow`,
+  `addopts = "-m 'not slow'"`; chạy bằng `uv run pytest -m slow`.
+- Kết luận trên `lakehouse`: Whisper (`temperature=0`, `language="en"`), OCR, scene detect
+  và câu SQL ghép đều tất định trên cùng máy.
+- `con.execute(...)` trả về connection (không có `.columns`); `con.sql(...)` trả về
+  relation (có `.columns`).
+
 ## Câu hỏi tự kiểm tra
 
 | Câu hỏi | Test kiểm tra |
@@ -617,3 +635,6 @@ thông tin về lần chạy cũ còn trong `runs`; nội dung cũ còn trong `d
 | p95 tính thế nào? | `test_align_reports_gap_percentiles` |
 | Ghi đè bằng danh sách rỗng có xóa dữ liệu cũ không? | `test_overwrite_with_only_empty_tables_still_deletes` |
 | Report cảnh báo những gì? Đúng 5% nearest có cảnh báo không? | `test_many_nearest_rows_warn_about_frames`, `test_nearest_at_the_threshold_is_not_warned`, `test_dlq_reasons_are_listed` |
+| Vì sao so sánh phải `EXCEPT ALL` và hai chiều? | `test_extra_row_in_dir2_needs_the_second_direction`, `test_duplicate_row_is_caught_by_except_all` |
+| Cột nào được bỏ qua khi so sánh? | `test_volatile_columns_are_ignored`, `test_other_code_version_differs_unless_ignored` |
+| Chạy cả pipeline 2 lần có ra cùng kết quả không? | `test_two_runs_give_the_same_rows` (`pytest -m slow`) |

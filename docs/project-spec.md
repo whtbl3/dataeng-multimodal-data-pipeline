@@ -202,7 +202,7 @@ CLI (`uv run talk-align ...`, argparse):
 | `report <video_id>` | In report của lần chạy gần nhất |
 | `replay --modality audio\|frame` | Replay các dòng DLQ `open` |
 | `export <video_id> [--out DIR]` | Export mọi bảng ra Parquet |
-| `check-idempotent <dir1> <dir2>` | `EXCEPT` hai chiều trên mọi cột trừ `run_id`, `processed_at` |
+| `check-idempotent <dir1> <dir2> [--ignore COL]` | `EXCEPT ALL` hai chiều trên mọi cột trừ `run_id`, `processed_at`, `failed_at` (kể cả field trong `provenance`); in cột nào khác; exit 1 nếu khác |
 
 Files (cả `data/` đều gitignored):
 ```
