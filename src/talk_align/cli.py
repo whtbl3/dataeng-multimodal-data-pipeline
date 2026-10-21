@@ -108,7 +108,9 @@ def main(argv=None):
     frame_parser = subparser.add_parser("frames", help="Extract one keyframe per slide")
     frame_parser.add_argument("video", type=Path, help="Path to input video file")
     # Subcommand: Align
-    align_parser = subparser.add_parser("align", help="Match each audio segment to one slide")
+    align_parser = subparser.add_parser(
+        "align", help="Match each audio segment to one slide"
+    )
     align_parser.add_argument("video_id", help="ID of the video to align")
 
     args = parser.parse_args(argv)
@@ -192,7 +194,7 @@ def main(argv=None):
         conn.close()
 
         print({**span_metrics, **metrics})
-    
+
     elif args.command == "align":
         conn = store.connect(db_path=DB_PATH)
         rows = align_video(conn, args.video_id)
