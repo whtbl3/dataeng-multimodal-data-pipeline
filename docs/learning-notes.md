@@ -593,6 +593,22 @@ thông tin về lần chạy cũ còn trong `runs`; nội dung cũ còn trong `d
 - `con.execute(...)` trả về connection (không có `.columns`); `con.sql(...)` trả về
   relation (có `.columns`).
 
+## 19. Bài học khi làm roadmap #7 (2026-10-23)
+
+- Replay dùng `raw_payload`, không chạy lại Whisper: audio chỉ chạy lại `build_rows` trên
+  đúng segment đó; frame lỗi ở bước OCR thì cắt lại một ảnh và OCR một ảnh.
+- `dlq_frame` lúc đầu chỉ lưu kết quả OCR, thiếu `t_start`, `t_end`, thời điểm chụp → không
+  replay được. Sửa: `raw_payload = {"slide": span, "ocr": raw}`. Bài học: DLQ phải giữ
+  **đủ** để làm lại bước bị lỗi, không chỉ giữ thứ bị lỗi.
+- Ghi bằng upsert theo PK, không DELETE theo `video_id`: replay chỉ chạm dòng của nó.
+- Mọi lần thử đều `attempts + 1`; 3 lần vẫn lỗi thì không chọn nữa → report "needs a
+  human". Dòng `replayed` / `ignored` không còn là vấn đề → report chỉ đếm `open`.
+- Kết quả thứ ba ngoài sửa được / vẫn lỗi: theo luật hiện tại dòng thành im lặng
+  (`ignored`).
+- Kiểm `source_hash`: replay với video khác sẽ "sửa" bằng nội dung sai.
+- Sửa được dòng nào thì `aligned` cũ thiếu dòng đó → dựng lại `aligned`.
+- Thử thật mà không đụng dữ liệu: bản sao `lab1.duckdb` và ảnh trong thư mục tạm.
+
 ## Câu hỏi tự kiểm tra
 
 | Câu hỏi | Test kiểm tra |
@@ -611,7 +627,6 @@ thông tin về lần chạy cũ còn trong `runs`; nội dung cũ còn trong `d
 | Có segment nào có thể "biến mất" không? | `test_every_segment_is_accounted_for` |
 | Vì sao 2 bảng phải chung 1 transaction? | `test_failure_in_dlq_rolls_back_audio_too` |
 | Lần chạy mới hết lỗi thì dòng DLQ cũ đi đâu? | `test_rerun_without_errors_clears_old_dlq_rows` |
-| Replay 2 lần ra mấy dòng? | (roadmap #7) |
 | Slide 0.4 s do chuyển cảnh xử lý ra sao, vì sao không vào DLQ? | `test_spec_example`, `test_every_slide_is_at_least_min_duration` |
 | Mốc 0.0 quá gần mốc kế tiếp thì bỏ mốc nào? | `test_zero_is_never_dropped` |
 | Có đoạn video nào không thuộc slide nào không? | `test_slides_tile_the_whole_video` |
@@ -638,3 +653,8 @@ thông tin về lần chạy cũ còn trong `runs`; nội dung cũ còn trong `d
 | Vì sao so sánh phải `EXCEPT ALL` và hai chiều? | `test_extra_row_in_dir2_needs_the_second_direction`, `test_duplicate_row_is_caught_by_except_all` |
 | Cột nào được bỏ qua khi so sánh? | `test_volatile_columns_are_ignored`, `test_other_code_version_differs_unless_ignored` |
 | Chạy cả pipeline 2 lần có ra cùng kết quả không? | `test_two_runs_give_the_same_rows` (`pytest -m slow`) |
+| Replay 2 lần ra mấy dòng? | `test_replaying_twice_changes_nothing_the_second_time` |
+| Dòng vẫn lỗi sau 3 lần thì sao? | `test_still_failing_row_counts_attempts_then_needs_a_human` |
+| Replay có xóa dòng khác của video không? | `test_replay_never_deletes_other_rows_of_the_video` |
+| Ảnh hỏng được sửa thế nào? | `test_corrupt_keyframe_is_cut_again_and_fixed`, `test_frame_dlq_payload_keeps_the_slide_span` |
+| Replay với video khác thì sao? | `test_replay_refuses_another_video` |

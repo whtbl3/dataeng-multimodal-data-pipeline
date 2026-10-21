@@ -157,20 +157,72 @@ def latest_run(conn: duckdb.DuckDBPyConnection, video_id: str) -> dict | None:
 
 
 def dlq_reason_counts(conn: duckdb.DuckDBPyConnection, video_id: str) -> dict[str, int]:
-    """DLQ rows of a video per table and reason_code, e.g. {"dlq_audio/EMPTY_TEXT": 2}.
+    """OPEN DLQ rows of a video per table and reason_code, e.g. {"dlq_audio/EMPTY_TEXT": 2}.
 
-    Reads the tables as they are now, i.e. the latest write of each lane.
+    Reads the tables as they are now. Rows already replayed or ignored are not problems.
     """
     rows = conn.execute(
         """
-        SELECT 'dlq_audio/' || reason_code AS k, count(*) FROM dlq_audio WHERE video_id = $v GROUP BY 1
+        SELECT 'dlq_audio/' || reason_code AS k, count(*) FROM dlq_audio
+        WHERE video_id = $v AND status = 'open' GROUP BY 1
         UNION ALL
-        SELECT 'dlq_frame/' || reason_code, count(*) FROM dlq_frame WHERE video_id = $v GROUP BY 1
+        SELECT 'dlq_frame/' || reason_code, count(*) FROM dlq_frame
+        WHERE video_id = $v AND status = 'open' GROUP BY 1
         ORDER BY 1
         """,
         {"v": video_id},
     ).fetchall()
     return dict(rows)
+
+
+def open_dlq_rows(
+    conn: duckdb.DuckDBPyConnection, table: str, video_id: str, max_attempts: int
+) -> list[dict]:
+    """DLQ rows still worth a replay: status open and fewer than max_attempts tries."""
+    rel = conn.execute(
+        f"SELECT * FROM {table} WHERE video_id = ? AND status = 'open' "
+        "AND attempts < ? ORDER BY dlq_id",
+        [video_id, max_attempts],
+    )
+    cols = [d[0] for d in rel.description]
+    return [dict(zip(cols, r)) for r in rel.fetchall()]
+
+
+def dlq_needs_human(
+    conn: duckdb.DuckDBPyConnection, video_id: str, max_attempts: int
+) -> int:
+    """Open DLQ rows (both tables) that failed max_attempts replays: replay stops there."""
+    return conn.execute(
+        """
+        SELECT (SELECT count(*) FROM dlq_audio WHERE video_id = $v AND status = 'open' AND attempts >= $m)
+             + (SELECT count(*) FROM dlq_frame WHERE video_id = $v AND status = 'open' AND attempts >= $m)
+        """,
+        {"v": video_id, "m": max_attempts},
+    ).fetchone()[0]
+
+
+def replay_write(
+    conn: duckdb.DuckDBPyConnection,
+    main_table: str,
+    fixed_rows: list[dict],
+    dlq_table: str,
+    dlq_rows: list[dict],
+) -> None:
+    """Fixed rows into the main table and updated DLQ rows back, in ONE transaction.
+
+    Upsert by primary key, never DELETE by video_id: a replay touches only its own rows,
+    and running it twice leaves the same tables.
+    """
+    try:
+        conn.begin()
+        if fixed_rows:
+            upsert_rows(conn, main_table, fixed_rows)
+        if dlq_rows:
+            upsert_rows(conn, dlq_table, dlq_rows)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
 
 
 def export_parquet(

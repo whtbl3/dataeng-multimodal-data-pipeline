@@ -5,7 +5,12 @@ Pure functions: no database, no files (store.latest_run / dlq_reason_counts read
 Roadmap #6.
 """
 
-from talk_align.config import GAP_WARN_P95_S, NEAREST_WARN_PCT, WEAK_MATCH_RATIO
+from talk_align.config import (
+    GAP_WARN_P95_S,
+    MAX_REPLAY_ATTEMPTS,
+    NEAREST_WARN_PCT,
+    WEAK_MATCH_RATIO,
+)
 
 
 def _lane(result: dict, name: str) -> dict | None:
@@ -79,7 +84,9 @@ def summarize(result: dict) -> dict:
     return summary
 
 
-def warnings(run: dict, dlq_by_reason: dict[str, int]) -> list[str]:
+def warnings(
+    run: dict, dlq_by_reason: dict[str, int], needs_human: int = 0
+) -> list[str]:
     """Plain-language warnings for one runs row; [] when nothing needs a look.
 
     Input:  a runs row from store.latest_run (metrics already parsed), and
@@ -106,6 +113,10 @@ def warnings(run: dict, dlq_by_reason: dict[str, int]) -> list[str]:
         rate = summary.get(key)
         if rate:
             found.append(f"{lane} DLQ rate {rate:.1%}: pipeline bugs, not noisy data")
+    if needs_human:
+        found.append(
+            f"{needs_human} DLQ rows failed {MAX_REPLAY_ATTEMPTS} replays: needs a human"
+        )
     if dlq_by_reason:
         listed = ", ".join(f"{k} {n}" for k, n in sorted(dlq_by_reason.items()))
         found.append(f"DLQ rows by reason: {listed}")
@@ -154,7 +165,9 @@ def _lane_line(metrics: dict, step: str, body: str) -> str:
     return body
 
 
-def render_report(run: dict, dlq_by_reason: dict[str, int]) -> str:
+def render_report(
+    run: dict, dlq_by_reason: dict[str, int], needs_human: int = 0
+) -> str:
     """Markdown report of one runs row: header, one section per step, warnings."""
     m = run.get("metrics") or {}
     s = m.get("summary") or {}
@@ -181,7 +194,7 @@ def render_report(run: dict, dlq_by_reason: dict[str, int]) -> str:
         f"align_gap_ratio p50 {_fmt(s.get('p50_align_gap_ratio'), '.2f')} · "
         f"p95 {_fmt(s.get('p95_align_gap_ratio'), '.2f')}"
     )
-    found = warnings(run, dlq_by_reason)
+    found = warnings(run, dlq_by_reason, needs_human)
     warning_lines = "\n".join(f"- {w}" for w in found) if found else "- none"
 
     return (

@@ -19,6 +19,7 @@ WORK_DIR.mkdir(parents=True, exist_ok=True)
 QUARANTINE_THRESHOLD = 0.3
 WEAK_MATCH_RATIO = 0.5  # align_gap_ratio above this -> weak match (learning-notes §8)
 NEAREST_WARN_PCT = 5.0  # nearest rows above this % -> frame lane lost slides (§8)
+MAX_REPLAY_ATTEMPTS = 3  # a DLQ row failing this many replays needs a human (spec §4)
 GAP_WARN_P95_S = 3.0  # p95 align_gap_s above this -> slide boundaries look shifted (§8)
 
 

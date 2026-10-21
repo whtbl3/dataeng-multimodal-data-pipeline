@@ -14,10 +14,16 @@ from datetime import datetime
 from importlib.metadata import version
 from pathlib import Path
 
-from talk_align import store
+from talk_align import replay, store
 from talk_align.align import align_video
 from talk_align.audio_lane import build_rows, transcribe
-from talk_align.config import BASE_DIR, DB_PATH, AudioParams, FrameParams
+from talk_align.config import (
+    BASE_DIR,
+    DB_PATH,
+    MAX_REPLAY_ATTEMPTS,
+    AudioParams,
+    FrameParams,
+)
 from talk_align.contract import AlignedRow
 from talk_align.frame_lane import (
     build_slide_rows,
@@ -33,6 +39,10 @@ from talk_align.report import summarize
 
 class MissingInputError(Exception):
     """A step needs rows that an earlier step has not written yet."""
+
+
+class SourceMismatchError(Exception):
+    """The video given to replay is not the one that produced the DLQ rows."""
 
 
 def new_run_id() -> str:
@@ -177,6 +187,75 @@ def run_align(video_id: str, run_id: str, db_path: Path | str = DB_PATH) -> dict
         )
     finally:
         conn.close()
+    return metrics
+
+
+def run_replay(video_path: Path, modality: str, db_path: Path | str = DB_PATH) -> dict:
+    """Replay open DLQ rows of one modality ("audio" | "frame") for this video.
+
+    No Whisper: audio rows are re-validated from raw_payload; frame rows with an OCR-stage
+    error get their keyframe cut again and OCR on that one image. Fixed rows are upserted
+    (never DELETE by video_id), then `aligned` is rebuilt if anything changed.
+    Output: {"replayed_in", "fixed", "still_failing", "ignored", "needs_human", "realigned"}
+    """
+    video_id = video_path.stem
+    run_id = new_run_id()
+    if modality == "audio":
+        dlq_table, main_table = "dlq_audio", "audio_segments"
+        params = AudioParams()
+        provenance = build_provenance(
+            video_path, "faster-whisper", params.model, params, run_id
+        )
+    else:
+        dlq_table, main_table = "dlq_frame", "slides"
+        params = FrameParams()
+        provenance = build_provenance(
+            video_path,
+            "rapidocr_onnxruntime",
+            version("rapidocr_onnxruntime"),
+            params,
+            run_id,
+        )
+
+    conn = store.connect(db_path)
+    try:
+        rows = store.open_dlq_rows(conn, dlq_table, video_id, MAX_REPLAY_ATTEMPTS)
+    finally:
+        conn.close()
+
+    # replaying against another video would "fix" rows with the wrong content
+    other = {r["provenance"]["source_hash"] for r in rows} - {provenance["source_hash"]}
+    if other:
+        raise SourceMismatchError(
+            f"{video_path} is not the video that produced the {dlq_table} rows of "
+            f"{video_id} (source_hash differs)"
+        )
+
+    if modality == "audio":
+        fixed, updated, metrics = replay.replay_audio_rows(
+            rows, video_id, probe_duration(video_path), provenance
+        )
+    else:
+        fixed, updated, metrics = replay.replay_frame_rows(
+            rows, video_id, video_path, params, provenance
+        )
+
+    conn = store.connect(db_path)
+    try:
+        store.replay_write(conn, main_table, fixed, dlq_table, updated)
+        metrics["needs_human"] = store.dlq_needs_human(
+            conn, video_id, MAX_REPLAY_ATTEMPTS
+        )
+    finally:
+        conn.close()
+
+    metrics["realigned"] = False
+    if fixed:  # aligned was built without these rows
+        try:
+            run_align(video_id, run_id, db_path=db_path)
+            metrics["realigned"] = True
+        except MissingInputError:
+            pass  # the other lane has not run yet: nothing to align
     return metrics
 
 

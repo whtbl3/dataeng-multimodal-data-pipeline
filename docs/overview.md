@@ -178,7 +178,7 @@ ghép, 0 lỗi, không có cảnh báo.
 
 ---
 
-## Bước 10. Sửa và chạy lại các bản ghi bị lỗi (replay DLQ), roadmap #7, chưa làm
+## Bước 10. Sửa và chạy lại các bản ghi bị lỗi (replay DLQ), roadmap #7, đã làm
 
 **Vấn đề:** bản ghi lỗi đã nằm trong DLQ, nhưng mới chỉ được **cất đi**. Sau khi sửa code
 hoặc sửa nguyên nhân, cần đưa chúng trở lại bảng chính. Chạy lại cả video thì rất tốn:
@@ -189,7 +189,8 @@ liệu gốc đó, cho đi qua lại bước kiểm tra, mà không phải chạ
 đưa vào bảng chính; dòng nào vẫn lỗi thì giữ lại và đếm số lần thử.
 
 **Giải pháp:**
-- Lệnh `talk-align replay --modality audio|frame`, chỉ lấy các dòng DLQ có `status = open`.
+- Lệnh `talk-align replay <video> --modality audio|frame`, chỉ lấy các dòng DLQ có
+  `status = open`. Cần video để biết độ dài, cắt lại ảnh, và kiểm đúng video (`source_hash`).
 - Với audio: đọc lại `raw_payload` rồi chạy lại các luật kiểm tra.
 - Với frame: nếu lỗi là `CORRUPT_KEYFRAME` thì chụp lại ảnh từ video rồi OCR lại.
 - Dòng sửa được: ghi vào bảng chính bằng **upsert theo mã** (chỉ thay đúng dòng đó, không
@@ -198,8 +199,9 @@ liệu gốc đó, cho đi qua lại bước kiểm tra, mà không phải chạ
   người xem".
 - Chạy replay 1 lần hay 10 lần đều phải ra cùng một kết quả.
 
-**Lưu ý:** video `lakehouse` hiện có 0 dòng lỗi, nên phải tự tạo lỗi để thử (làm hỏng một
-ảnh slide, hoặc dùng câu nói giả trong test).
+**Kết quả:** thử thật trên bản sao database: slide "1980s" bị giả lập ảnh hỏng (vào
+`dlq_frame`), replay cắt lại ảnh ở giây 30, OCR lại, slide quay về `slides` với đúng chữ,
+3 câu nói được ghép lại. Database thật không có dòng lỗi nên replay không đổi gì.
 
 ---
 

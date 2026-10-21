@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from talk_align import idempotency, pipeline, store
-from talk_align.config import DB_PATH, OUT_DIR
+from talk_align.config import DB_PATH, MAX_REPLAY_ATTEMPTS, OUT_DIR
 from talk_align.report import render_report
 
 
@@ -44,6 +44,10 @@ def build_parser() -> argparse.ArgumentParser:
     report = sub.add_parser("report", help="Print the report of the latest run")
     report.add_argument("video_id", help="ID of the video to report on")
 
+    replay = sub.add_parser("replay", help="Retry open DLQ rows of one modality")
+    replay.add_argument("video", type=Path, help="The video that produced the DLQ rows")
+    replay.add_argument("--modality", choices=["audio", "frame"], required=True)
+
     check = sub.add_parser(
         "check-idempotent", help="Compare two export dirs with EXCEPT both ways"
     )
@@ -68,7 +72,11 @@ def latest_report(video_id: str, db_path: Path | str) -> tuple[dict, str] | None
         run = store.latest_run(conn, video_id)
         if run is None:
             return None
-        return run, render_report(run, store.dlq_reason_counts(conn, video_id))
+        return run, render_report(
+            run,
+            store.dlq_reason_counts(conn, video_id),
+            store.dlq_needs_human(conn, video_id, MAX_REPLAY_ATTEMPTS),
+        )
     finally:
         conn.close()
 
@@ -134,6 +142,13 @@ def main(argv=None) -> int:
         if found is None:
             parser.error(f"No run recorded for {args.video_id} (use talk-align run)")
         print(found[1])
+
+    elif args.command == "replay":
+        video_path = resolve_video(parser, args.video)
+        try:
+            print(pipeline.run_replay(video_path, args.modality))
+        except pipeline.SourceMismatchError as e:
+            parser.error(str(e))
 
     elif args.command == "check-idempotent":
         for d in (args.dir1, args.dir2):

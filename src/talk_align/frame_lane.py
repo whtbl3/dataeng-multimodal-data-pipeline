@@ -137,6 +137,26 @@ def plan_keyframes(video_id: str, spans: list[dict]) -> list[dict]:
     return planned
 
 
+def extract_keyframe(video_path: Path, slide: dict) -> None:
+    """Write the PNG of one slide at slide["keyframe_at"]. Also used by DLQ replay."""
+    Path(slide["keyframe_path"]).parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-ss",
+        str(slide["keyframe_at"]),  # before -i: fast seek
+        "-i",
+        str(video_path),
+        "-frames:v",
+        "1",
+        str(slide["keyframe_path"]),
+    ]
+    subprocess.run(cmd, check=True)
+
+
 def extract_keyframes(video_path: Path, video_id: str, planned: list[dict]) -> None:
     """Write one PNG per slide. Replaces this video's keyframe folder (no stale files).
 
@@ -148,21 +168,7 @@ def extract_keyframes(video_path: Path, video_id: str, planned: list[dict]) -> N
     shutil.rmtree(out_dir, ignore_errors=True)
     out_dir.mkdir(parents=True, exist_ok=True)
     for slide in planned:
-        cmd = [
-            "ffmpeg",
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-y",
-            "-ss",
-            str(slide["keyframe_at"]),  # before -i: fast seek
-            "-i",
-            str(video_path),
-            "-frames:v",
-            "1",
-            str(slide["keyframe_path"]),
-        ]
-        subprocess.run(cmd, check=True)
+        extract_keyframe(video_path, slide)
 
 
 def ocr_keyframes(planned: list[dict]) -> dict[str, dict]:
@@ -284,8 +290,20 @@ def make_frame_dlq_row(
     raw: dict,
     provenance: dict,
 ) -> dict:
-    """One dlq_frame row (11 columns). slide_id always exists: it is made before OCR."""
+    """One dlq_frame row (11 columns). slide_id always exists: it is made before OCR.
+
+    raw_payload keeps the slide span next to the OCR output, so replay can cut the
+    keyframe again at the same time and rebuild the row without running scene detect:
+    {"slide": {"slide_id", "t_start", "t_end", "keyframe_at", "keyframe_path"}, "ocr": raw}
+    """
     slide_id = slide["slide_id"]
+    span = {
+        "slide_id": slide_id,
+        "t_start": slide.get("t_start"),
+        "t_end": slide.get("t_end"),
+        "keyframe_at": slide.get("keyframe_at"),
+        "keyframe_path": str(slide.get("keyframe_path")),
+    }
     return {
         "dlq_id": f"dlq_{stage}_{slide_id}",
         "video_id": video_id,
@@ -293,7 +311,7 @@ def make_frame_dlq_row(
         "stage": stage,
         "reason_code": reason_code,
         "error_detail": error_detail,
-        "raw_payload": json.dumps(raw, ensure_ascii=False),
+        "raw_payload": json.dumps({"slide": span, "ocr": raw}, ensure_ascii=False),
         "provenance": provenance,
         "failed_at": provenance[
             "processed_at"

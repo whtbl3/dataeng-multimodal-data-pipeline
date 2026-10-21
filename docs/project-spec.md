@@ -121,6 +121,15 @@ provenance, failed_at, attempts, status`
   `extract | ocr | validate | write`.
 - `status`: `open | replayed | ignored`. Replay 3 lần vẫn lỗi (`attempts >= 3`) thì
   dừng, report ghi "needs human".
+- Đã cài (roadmap #7): mỗi lần replay `attempts + 1`. Sửa được → upsert vào bảng chính
+  (không DELETE theo `video_id`), `replayed`; vẫn lỗi → `open`, ghi `reason_code` /
+  `error_detail` của lần thử này; theo luật hiện tại thành im lặng → `ignored`. Ghi bảng
+  chính + DLQ trong 1 transaction, có dòng sửa được thì dựng lại `aligned`.
+- `dlq_frame.raw_payload` = `{"slide": {slide_id, t_start, t_end, keyframe_at,
+  keyframe_path}, "ocr": <entry OCR hoặc lỗi>}`: replay cắt lại keyframe đúng thời điểm
+  mà không chạy lại scene detect.
+- Replay từ chối video có `source_hash` khác với dòng DLQ (`SourceMismatchError`).
+- Report và `dlq_reason_counts` chỉ tính dòng `open`.
 
 ### `reason_code`
 Viết hoa, mô tả lỗi chứ không mô tả cách sửa.
@@ -200,7 +209,7 @@ CLI (`uv run talk-align ...`, argparse):
 | `audio <video>` / `frames <video>` | Chạy riêng một lane rồi ghi vào store |
 | `align <video_id>` | Dựng lại `aligned` từ bảng hiện có |
 | `report <video_id>` | In report của lần chạy gần nhất |
-| `replay --modality audio\|frame` | Replay các dòng DLQ `open` |
+| `replay <video> --modality audio\|frame` | Replay các dòng DLQ `open` có `attempts < 3`; cần video để tính duration, cắt lại keyframe và kiểm `source_hash` |
 | `export <video_id> [--out DIR]` | Export mọi bảng ra Parquet |
 | `check-idempotent <dir1> <dir2> [--ignore COL]` | `EXCEPT ALL` hai chiều trên mọi cột trừ `run_id`, `processed_at`, `failed_at` (kể cả field trong `provenance`); in cột nào khác; exit 1 nếu khác |
 
