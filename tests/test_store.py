@@ -13,10 +13,14 @@ from tests.test_audio_lane import PROVENANCE, make_seg
 FIXTURE = Path(__file__).parent / "fixtures" / "whisper_lakehouse.json"
 OCR = Path(__file__).parent / "fixtures" / "ocr_lakehouse.json"
 
+
 def slide_rows(video_id="lakehouse"):
     d = json.loads(OCR.read_text())
-    ok, dlq, _ = build_slide_rows(video_id, d["slides"], d["ocr"], FrameParams(), PROVENANCE)
+    ok, dlq, _ = build_slide_rows(
+        video_id, d["slides"], d["ocr"], FrameParams(), PROVENANCE
+    )
     return ok, dlq
+
 
 def test_schema_has_the_ten_audio_columns():
     con = store.connect(":memory:")
@@ -37,7 +41,9 @@ def test_schema_has_the_ten_audio_columns():
 def test_insert_writes_all_rows():
     fixture = json.loads(FIXTURE.read_text())
     con = store.connect(":memory:")
-    ok_rows, _dlq, _metrics = build_rows("lakehouse", fixture["segments"], fixture["duration"], PROVENANCE)
+    ok_rows, _dlq, _metrics = build_rows(
+        "lakehouse", fixture["segments"], fixture["duration"], PROVENANCE
+    )
     store.insert_rows(con, "audio_segments", ok_rows)
     count = con.execute("SELECT count(*) FROM audio_segments").fetchone()[0]
     con.close()
@@ -47,7 +53,9 @@ def test_insert_writes_all_rows():
 def test_insert_twice_fails():
     fixture = json.loads(FIXTURE.read_text())
     con = store.connect(":memory:")
-    ok_rows, _dlq, _metrics = build_rows("lakehouse", fixture["segments"], fixture["duration"], PROVENANCE)
+    ok_rows, _dlq, _metrics = build_rows(
+        "lakehouse", fixture["segments"], fixture["duration"], PROVENANCE
+    )
     store.insert_rows(con, "audio_segments", ok_rows)
     with pytest.raises(duckdb.ConstraintException):
         store.insert_rows(con, "audio_segments", ok_rows)
@@ -135,7 +143,9 @@ def test_export_writes_one_sorted_file(
     store.overwrite_video(con, "audio_segments", "talk02", rows_at("talk02", [1.0]))
     paths = store.export_parquet(con, "talk01", tmp_path)
     assert set(paths) == {"audio_segments", "dlq_audio", "slides", "dlq_frame"}
-    exported = duckdb.sql(f"SELECT segment_id FROM '{paths['audio_segments']}'").fetchall()
+    exported = duckdb.sql(
+        f"SELECT segment_id FROM '{paths['audio_segments']}'"
+    ).fetchall()
     assert exported == [
         ("talk01_a_00001000",),
         ("talk01_a_00004000",),
@@ -153,16 +163,24 @@ def test_dlq_rows_are_written():
     )
     store.overwrite_video_tables(con, "v", {"audio_segments": ok, "dlq_audio": dlq})
     assert con.execute("SELECT count(*) FROM audio_segments").fetchone()[0] == 1
-    assert con.execute("SELECT reason_code FROM dlq_audio").fetchall() == [("EMPTY_TEXT",)]
+    assert con.execute("SELECT reason_code FROM dlq_audio").fetchall() == [
+        ("EMPTY_TEXT",)
+    ]
     con.close()
 
 
 def test_rerun_without_errors_clears_old_dlq_rows():
     con = store.connect(":memory:")
-    _, dlq, _ = build_rows("v", [make_seg(text="", no_speech_prob=0.1)], 600.0, PROVENANCE)
-    store.overwrite_video_tables(con, "v", {"audio_segments": [], "dlq_audio": dlq})  # lần 1: có lỗi
+    _, dlq, _ = build_rows(
+        "v", [make_seg(text="", no_speech_prob=0.1)], 600.0, PROVENANCE
+    )
+    store.overwrite_video_tables(
+        con, "v", {"audio_segments": [], "dlq_audio": dlq}
+    )  # lần 1: có lỗi
     ok, _, _ = build_rows("v", [make_seg()], 600.0, PROVENANCE)
-    store.overwrite_video_tables(con, "v", {"audio_segments": ok, "dlq_audio": []})  # lần 2: hết lỗi
+    store.overwrite_video_tables(
+        con, "v", {"audio_segments": ok, "dlq_audio": []}
+    )  # lần 2: hết lỗi
     assert con.execute("SELECT count(*) FROM dlq_audio").fetchone()[0] == 0
     con.close()
 
@@ -179,11 +197,16 @@ def test_failure_in_dlq_rolls_back_audio_too():
     )
     with pytest.raises(duckdb.ConstraintException):
         store.overwrite_video_tables(
-            con, "v", {"audio_segments": new_ok, "dlq_audio": dlq + dlq}  # dlq trùng id → lỗi
+            con,
+            "v",
+            {"audio_segments": new_ok, "dlq_audio": dlq + dlq},  # dlq trùng id → lỗi
         )
-    ids = [r[0] for r in con.execute("SELECT segment_id FROM audio_segments").fetchall()]
+    ids = [
+        r[0] for r in con.execute("SELECT segment_id FROM audio_segments").fetchall()
+    ]
     assert ids == ["v_a_00001000"]  # audio quay về dòng CŨ
     con.close()
+
 
 def test_schema_has_slides_and_dlq_frame():
     con = store.connect(":memory:")
@@ -193,8 +216,10 @@ def test_schema_has_slides_and_dlq_frame():
     dlq_f = [r[:2] for r in con.execute("DESCRIBE dlq_frame").fetchall()]
     con.close()
     assert tables == {"audio_segments", "dlq_audio", "slides", "dlq_frame"}
-    assert slide_cols == set(slide_rows()[0][0])      # schema == the keys build_slide_rows makes
-    assert dlq_a == dlq_f                             # same columns, same types, same order
+    assert slide_cols == set(
+        slide_rows()[0][0]
+    )  # schema == the keys build_slide_rows makes
+    assert dlq_a == dlq_f  # same columns, same types, same order
 
 
 def test_slides_are_written():
@@ -208,9 +233,11 @@ def test_slides_are_written():
 
 def test_frame_write_keeps_audio_rows():
     con = store.connect(":memory:")
-    store.overwrite_video(con, "audio_segments", "lakehouse", rows_at("lakehouse", [1.0, 4.0]))
+    store.overwrite_video(
+        con, "audio_segments", "lakehouse", rows_at("lakehouse", [1.0, 4.0])
+    )
     ok, dlq = slide_rows()
     store.overwrite_video_tables(con, "lakehouse", {"slides": ok, "dlq_frame": dlq})
     audio = con.execute("SELECT count(*) FROM audio_segments").fetchone()[0]
     con.close()
-    assert audio == 2                                 # frame lane does not wipe the audio lane
+    assert audio == 2  # frame lane does not wipe the audio lane

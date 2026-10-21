@@ -20,7 +20,9 @@ PROVENANCE = {
 
 def test_build_rows_runs_on_fixture():
     fixture = json.loads(FIXTURE.read_text())
-    ok_rows, _dlq, _metrics = build_rows(fixture["video_id"], fixture["segments"], fixture["duration"], PROVENANCE)
+    ok_rows, _dlq, _metrics = build_rows(
+        fixture["video_id"], fixture["segments"], fixture["duration"], PROVENANCE
+    )
     assert [r["segment_id"] for r in ok_rows] == [
         "lakehouse_a_00000000",
         "lakehouse_a_00005000",
@@ -74,36 +76,55 @@ def test_quality_flag_threshold():
 def test_running_twice_gives_the_same_rows():
     fixture = json.loads(FIXTURE.read_text())
     segs = fixture["segments"] + [make_seg(start=50.0, text="", no_speech_prob=0.1)]
-    first   = build_rows(fixture["video_id"], segs, fixture["duration"], PROVENANCE)
-    second  = build_rows(fixture["video_id"], segs, fixture["duration"], PROVENANCE)
+    first = build_rows(fixture["video_id"], segs, fixture["duration"], PROVENANCE)
+    second = build_rows(fixture["video_id"], segs, fixture["duration"], PROVENANCE)
     assert first == second
     assert len(first[1]) == 1
 
+
 def test_metrics_counts_segments_in():
     fixture = json.loads(FIXTURE.read_text())
-    ok_rows, dlq_rows, metrics = build_rows(fixture["video_id"], fixture["segments"], fixture["duration"], PROVENANCE)
+    ok_rows, dlq_rows, metrics = build_rows(
+        fixture["video_id"], fixture["segments"], fixture["duration"], PROVENANCE
+    )
     assert metrics["segments_in"] == 5
     assert dlq_rows == []
     assert len(ok_rows) == 5
 
+
 # Hàm phụ
 def make_seg(start=1.0, end=2.0, text=" hi", avg_logprob=-0.2, no_speech_prob=0.01):
-    return {"start": start, "end": end, "text": text,
-            "avg_logprob": avg_logprob, "no_speech_prob": no_speech_prob}
+    return {
+        "start": start,
+        "end": end,
+        "text": text,
+        "avg_logprob": avg_logprob,
+        "no_speech_prob": no_speech_prob,
+    }
+
 
 def test_silence_is_dropped_and_counted():
-    ok, dlq, m = build_rows("v", [make_seg(text="", no_speech_prob=0.9)], 600.0, PROVENANCE)
+    ok, dlq, m = build_rows(
+        "v", [make_seg(text="", no_speech_prob=0.9)], 600.0, PROVENANCE
+    )
     assert ok == []
     assert dlq == []
     assert m["dropped_silence"] == 1
 
-def test_silence_threshold_is_inclusive():                 # đúng 0.6 → "≥ 0.6" → bỏ
-    _ok, _dlq, m = build_rows("v", [make_seg(text="  ", no_speech_prob=0.6)], 600.0, PROVENANCE)
+
+def test_silence_threshold_is_inclusive():  # đúng 0.6 → "≥ 0.6" → bỏ
+    _ok, _dlq, m = build_rows(
+        "v", [make_seg(text="  ", no_speech_prob=0.6)], 600.0, PROVENANCE
+    )
     assert m["dropped_silence"] == 1
 
-def test_empty_text_with_speech_is_not_silence():          # có người nói mà không ra chữ → KHÔNG phải im lặng
-    _ok, _dlq, m = build_rows("v", [make_seg(text="", no_speech_prob=0.1)], 600.0, PROVENANCE)
+
+def test_empty_text_with_speech_is_not_silence():  # có người nói mà không ra chữ → KHÔNG phải im lặng
+    _ok, _dlq, m = build_rows(
+        "v", [make_seg(text="", no_speech_prob=0.1)], 600.0, PROVENANCE
+    )
     assert m["dropped_silence"] == 0
+
 
 def test_empty_text_with_speech_goes_to_dlq():
     seg = make_seg(start=50.0, end=52.0, text="", no_speech_prob=0.1)
@@ -113,63 +134,94 @@ def test_empty_text_with_speech_goes_to_dlq():
     row = dlq[0]
     assert row["reason_code"] == "EMPTY_TEXT"
     assert row["stage"] == "validate"
-    assert row["record_id"] == "v_a_00050000"              # tự tính segment_id từ "v" và 50.0
+    assert row["record_id"] == "v_a_00050000"  # tự tính segment_id từ "v" và 50.0
     assert row["status"] == "open" and row["attempts"] == 0
     assert json.loads(row["raw_payload"]) == seg  # giữ nguyên segment gốc
-    assert row["failed_at"] == PROVENANCE["processed_at"]   # không dùng now()
+    assert row["failed_at"] == PROVENANCE["processed_at"]  # không dùng now()
+
 
 def test_dlq_row_has_the_eleven_columns():
-    _, dlq, _ = build_rows("v", [make_seg(text="", no_speech_prob=0.1)], 600.0, PROVENANCE)
-    assert set(dlq[0]) == {"dlq_id", "video_id", "record_id", "stage", "reason_code", "error_detail",
-                           "raw_payload", "provenance", "failed_at", "attempts", "status"}
+    _, dlq, _ = build_rows(
+        "v", [make_seg(text="", no_speech_prob=0.1)], 600.0, PROVENANCE
+    )
+    assert set(dlq[0]) == {
+        "dlq_id",
+        "video_id",
+        "record_id",
+        "stage",
+        "reason_code",
+        "error_detail",
+        "raw_payload",
+        "provenance",
+        "failed_at",
+        "attempts",
+        "status",
+    }
+
 
 def test_end_before_start_goes_to_dlq():
     _, dlq, _ = build_rows("v", [make_seg(start=20.0, end=19.5)], 600.0, PROVENANCE)
     assert dlq[0]["reason_code"] == "INVALID_TIME_RANGE"
 
+
 def test_zero_length_goes_to_dlq():
     _, dlq, _ = build_rows("v", [make_seg(start=5.0, end=5.0)], 600.0, PROVENANCE)
     assert len(dlq) == 1
+
 
 def test_small_overrun_is_clipped():
     seg = make_seg(start=340.0, end=345.2)
     ok, _dlq, m = build_rows("v", [seg], 344.561, PROVENANCE)
     assert ok[0]["t_end"] == 344.561
     assert m["clipped_t_end"] == 1
-    assert json.loads(ok[0]["raw_payload"])["end"] == 345.2      # bản gốc không bị sửa
+    assert json.loads(ok[0]["raw_payload"])["end"] == 345.2  # bản gốc không bị sửa
+
 
 def test_overrun_at_tolerance_is_still_clipped():
-    ok, _, _ = build_rows("v", [make_seg(start=340.0, end=345.561)], 344.561, PROVENANCE)
+    ok, _, _ = build_rows(
+        "v", [make_seg(start=340.0, end=345.561)], 344.561, PROVENANCE
+    )
     assert len(ok) == 1
 
+
 def test_large_overrun_goes_to_dlq():
-    ok, dlq, _ = build_rows("v", [make_seg(start=340.0, end=346.0)], 344.561, PROVENANCE)
+    ok, dlq, _ = build_rows(
+        "v", [make_seg(start=340.0, end=346.0)], 344.561, PROVENANCE
+    )
     assert ok == [] and dlq[0]["reason_code"] == "TIME_OUT_OF_BOUNDS"
 
+
 def test_segment_starting_after_video_end_goes_to_dlq():
-    ok, dlq, _ = build_rows("v", [make_seg(start=344.8, end=345.0)], 344.561, PROVENANCE)
+    ok, dlq, _ = build_rows(
+        "v", [make_seg(start=344.8, end=345.0)], 344.561, PROVENANCE
+    )
     assert ok == []
     assert dlq[0]["reason_code"] == "TIME_OUT_OF_BOUNDS"
+
 
 def test_positive_logprob_gives_score_out_of_range():
     ok, dlq, _ = build_rows("v", [make_seg(avg_logprob=0.5)], 600.0, PROVENANCE)
     assert ok == []
     assert dlq[0]["reason_code"] == "SCORE_OUT_OF_RANGE"
 
+
 def test_missing_text_goes_to_dlq_without_crashing():
     _, dlq, _ = build_rows("v", [{"start": 3.0, "end": 4.0}], 600.0, PROVENANCE)
     assert dlq[0]["reason_code"] == "SCHEMA_VIOLATION"
-    assert dlq[0]["record_id"] == "v_a_00003000"              # có start → vẫn tính được
+    assert dlq[0]["record_id"] == "v_a_00003000"  # có start → vẫn tính được
+
 
 def test_missing_start_uses_raw_index():
-    segs = [make_seg(), {"end": 4.0, "text": " x"}]   # segment hỏng ở vị trí index 1
+    segs = [make_seg(), {"end": 4.0, "text": " x"}]  # segment hỏng ở vị trí index 1
     _, dlq, _ = build_rows("v", segs, 600.0, PROVENANCE)
     assert dlq[0]["record_id"] is None
     assert dlq[0]["dlq_id"] == "dlq_validate_v_raw00001"
 
+
 def test_text_none_goes_to_dlq():
     _, dlq, _ = build_rows("v", [make_seg(text=None)], 600.0, PROVENANCE)
     assert dlq[0]["reason_code"] == "SCHEMA_VIOLATION"
+
 
 def test_one_bad_segment_does_not_lose_the_good_ones():
     fixture = json.loads(FIXTURE.read_text())
@@ -179,24 +231,29 @@ def test_one_bad_segment_does_not_lose_the_good_ones():
     assert len(dlq) == 1
     assert m["segments_in"] == 6
 
+
 def test_every_segment_is_accounted_for():
     segs = [
-        make_seg(start=1.0),                                                 # ok
-        make_seg(start=2.0, end=3.0, avg_logprob=-1.2, no_speech_prob=0.5),  # ok nhưng quarantine
-        make_seg(start=3.0, text="", no_speech_prob=0.9),                    # im lặng
-        make_seg(start=4.0, text="", no_speech_prob=0.1),                    # EMPTY_TEXT
-        make_seg(start=6.0, end=5.5),                                        # INVALID_TIME_RANGE
-        make_seg(start=340.0, end=346.0),                                    # TIME_OUT_OF_BOUNDS
-        make_seg(start=7.0, end=8.0, avg_logprob=0.5),                       # SCORE_OUT_OF_RANGE
-        {"start": 8.0},                                                      # SCHEMA_VIOLATION
+        make_seg(start=1.0),  # ok
+        make_seg(
+            start=2.0, end=3.0, avg_logprob=-1.2, no_speech_prob=0.5
+        ),  # ok nhưng quarantine
+        make_seg(start=3.0, text="", no_speech_prob=0.9),  # im lặng
+        make_seg(start=4.0, text="", no_speech_prob=0.1),  # EMPTY_TEXT
+        make_seg(start=6.0, end=5.5),  # INVALID_TIME_RANGE
+        make_seg(start=340.0, end=346.0),  # TIME_OUT_OF_BOUNDS
+        make_seg(start=7.0, end=8.0, avg_logprob=0.5),  # SCORE_OUT_OF_RANGE
+        {"start": 8.0},  # SCHEMA_VIOLATION
     ]
     _ok, dlq, m = build_rows("v", segs, 344.561, PROVENANCE)
     assert m["segments_in"] == m["ok"] + m["dlq"] + m["dropped_silence"]
     assert (m["ok"], m["dlq"], m["dropped_silence"], m["quarantined"]) == (2, 5, 1, 1)
-    assert sorted(r["reason_code"] for r in dlq) == sorted([
-        "EMPTY_TEXT",
-        "INVALID_TIME_RANGE",
-        "TIME_OUT_OF_BOUNDS",
-        "SCORE_OUT_OF_RANGE",
-        "SCHEMA_VIOLATION",
-    ])
+    assert sorted(r["reason_code"] for r in dlq) == sorted(
+        [
+            "EMPTY_TEXT",
+            "INVALID_TIME_RANGE",
+            "TIME_OUT_OF_BOUNDS",
+            "SCORE_OUT_OF_RANGE",
+            "SCHEMA_VIOLATION",
+        ]
+    )

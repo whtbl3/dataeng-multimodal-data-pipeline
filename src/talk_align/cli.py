@@ -116,7 +116,9 @@ def main(argv=None):
         video_id: str = video_path.stem
 
         params = AudioParams()
-        provenance = build_provenance(video_path, "faster-whisper", params.model, params)
+        provenance = build_provenance(
+            video_path, "faster-whisper", params.model, params
+        )
 
         raw_segments, duration = transcribe(video_path, params)
 
@@ -150,7 +152,7 @@ def main(argv=None):
             SELECT DISTINCT provenance.run_id, provenance.processed_at FROM dlq_frame WHERE video_id = $v
             """,
             {"v": video_id},
-        ).fetchall()                                   # [(run_id, processed_at), ...]
+        ).fetchall()  # [(run_id, processed_at), ...]
         if not runs:
             parser.error(f"No rows for video_id: {video_id}")
         # latest run; run_id breaks a tie so the choice is always the same
@@ -174,11 +176,15 @@ def main(argv=None):
         provenance = build_provenance(
             video_path, "rapidocr_onnxruntime", version("rapidocr_onnxruntime"), params
         )
-        ok_rows, dlq_rows, metrics = build_slide_rows(video_id, planned, raw_ocr, params, provenance)
+        ok_rows, dlq_rows, metrics = build_slide_rows(
+            video_id, planned, raw_ocr, params, provenance
+        )
 
         # frame lane only: audio_segments / dlq_audio of this video stay untouched (spec §3)
         conn = store.connect(db_path=DB_PATH)
-        store.overwrite_video_tables(conn, video_id, {"slides": ok_rows, "dlq_frame": dlq_rows})
+        store.overwrite_video_tables(
+            conn, video_id, {"slides": ok_rows, "dlq_frame": dlq_rows}
+        )
         conn.close()
 
         print({**span_metrics, **metrics})

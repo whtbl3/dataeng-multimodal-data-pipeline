@@ -27,14 +27,22 @@ def detect_scene_times(video_path: Path, params: FrameParams) -> list[float]:
         f"showinfo"
     )
     cmd = [
-        "ffmpeg", "-hide_banner", "-nostats",   # no -loglevel error: showinfo logs at info level
-        "-i", str(video_path),
-        "-vf", video_filter,
-        "-an", "-f", "null", "-",               # drop audio, write no file
+        "ffmpeg",
+        "-hide_banner",
+        "-nostats",  # no -loglevel error: showinfo logs at info level
+        "-i",
+        str(video_path),
+        "-vf",
+        video_filter,
+        "-an",
+        "-f",
+        "null",
+        "-",  # drop audio, write no file
     ]
     result = subprocess.run(cmd, check=True, capture_output=True, text=True)
     # showinfo writes to the log, and ffmpeg's log goes to stderr (stdout is empty)
     return [float(t) for t in re.findall(r"pts_time:([0-9.]+)", result.stderr)]
+
 
 def build_slide_spans(
     times: list[float], duration: float, min_duration: float
@@ -90,7 +98,12 @@ def build_slide_spans(
         t_end = kept[i + 1] if i + 1 < len(kept) else duration
         spans.append({"t_start": t, "t_end": t_end})
 
-    return spans, {"marks_in": len(marks), "merged_transitions": merged, "slides": len(spans)}
+    return spans, {
+        "marks_in": len(marks),
+        "merged_transitions": merged,
+        "slides": len(spans),
+    }
+
 
 def make_slide_id(video_id: str, t_start: float) -> str:
     """Deterministic slide id from the start time in ms (round, never int).
@@ -112,13 +125,15 @@ def plan_keyframes(video_id: str, spans: list[dict]) -> list[dict]:
     planned = []
     for span in spans:
         slide_id = make_slide_id(video_id, span["t_start"])
-        planned.append({
-            **span,
-            "slide_id": slide_id,
-            # middle of the slide: at t_start a fade may still be running (marks are 1 s apart)
-            "keyframe_at": (span["t_start"] + span["t_end"]) / 2,
-            "keyframe_path": KEYFRAME_DIR / video_id / f"{slide_id}.png",
-        })
+        planned.append(
+            {
+                **span,
+                "slide_id": slide_id,
+                # middle of the slide: at t_start a fade may still be running (marks are 1 s apart)
+                "keyframe_at": (span["t_start"] + span["t_end"]) / 2,
+                "keyframe_path": KEYFRAME_DIR / video_id / f"{slide_id}.png",
+            }
+        )
     return planned
 
 
@@ -134,13 +149,21 @@ def extract_keyframes(video_path: Path, video_id: str, planned: list[dict]) -> N
     out_dir.mkdir(parents=True, exist_ok=True)
     for slide in planned:
         cmd = [
-            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-            "-ss", str(slide["keyframe_at"]),       # before -i: fast seek
-            "-i", str(video_path),
-            "-frames:v", "1",
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-ss",
+            str(slide["keyframe_at"]),  # before -i: fast seek
+            "-i",
+            str(video_path),
+            "-frames:v",
+            "1",
             str(slide["keyframe_path"]),
         ]
         subprocess.run(cmd, check=True)
+
 
 def ocr_keyframes(planned: list[dict]) -> dict[str, dict]:
     """Run OCR on each keyframe. One bad image never stops the others.
@@ -178,7 +201,7 @@ def ocr_keyframes(planned: list[dict]) -> dict[str, dict]:
                 "stage": "ocr",
             }
             continue
-        except Exception as e: # noqa: BLE001 - lỗi một slide không được làm dừng cả batch
+        except Exception as e:  # noqa: BLE001 - lỗi một slide không được làm dừng cả batch
             raw_ocr[slide_id] = {
                 "error": f"{type(e).__name__}: {e}",
                 "reason_code": "OCR_FAILED",
@@ -186,7 +209,10 @@ def ocr_keyframes(planned: list[dict]) -> dict[str, dict]:
             }
             continue
 
-        boxes = [{"box": box, "text": text, "conf": float(conf)} for box, text, conf in (result or [])]
+        boxes = [
+            {"box": box, "text": text, "conf": float(conf)}
+            for box, text, conf in (result or [])
+        ]
         raw_ocr[slide_id] = {"image_h": image_h, "boxes": boxes}
     return raw_ocr
 
@@ -219,6 +245,7 @@ def clean_boxes(boxes: list[dict], image_h: int, params: FrameParams) -> list[di
     ]
     return sorted(kept, key=lambda b: (box_top(b), box_left(b)))
 
+
 def slide_text(kept: list[dict]) -> str:
     """Join the kept boxes into the slide text, one line per box. Pure function.
 
@@ -247,9 +274,15 @@ def slide_flag(score: float) -> str:
     """'quarantine' below SLIDE_QUARANTINE_THRESHOLD, else 'ok'. The slide is kept either way."""
     return "quarantine" if score < SLIDE_QUARANTINE_THRESHOLD else "ok"
 
+
 def make_frame_dlq_row(
-    video_id: str, slide: dict, stage: str, reason_code: str,
-    error_detail: str, raw: dict, provenance: dict,
+    video_id: str,
+    slide: dict,
+    stage: str,
+    reason_code: str,
+    error_detail: str,
+    raw: dict,
+    provenance: dict,
 ) -> dict:
     """One dlq_frame row (11 columns). slide_id always exists: it is made before OCR."""
     slide_id = slide["slide_id"]
@@ -262,10 +295,13 @@ def make_frame_dlq_row(
         "error_detail": error_detail,
         "raw_payload": json.dumps(raw, ensure_ascii=False),
         "provenance": provenance,
-        "failed_at": provenance["processed_at"],  # not now(): keep build_slide_rows pure
+        "failed_at": provenance[
+            "processed_at"
+        ],  # not now(): keep build_slide_rows pure
         "attempts": 0,
         "status": "open",
     }
+
 
 def build_slide_rows(
     video_id: str,
@@ -285,16 +321,29 @@ def build_slide_rows(
     """
     ok_rows: list[dict] = []
     dlq_rows: list[dict] = []
-    metrics = {"slides_in": len(planned), "boxes_in": 0, "boxes_dropped": 0, "empty_text": 0}
+    metrics = {
+        "slides_in": len(planned),
+        "boxes_in": 0,
+        "boxes_dropped": 0,
+        "empty_text": 0,
+    }
 
     for slide in planned:
         r = raw_ocr[slide["slide_id"]]
 
         # branch 1: OCR could not read this keyframe
         if "error" in r:
-            dlq_rows.append(make_frame_dlq_row(
-                video_id, slide, r["stage"], r["reason_code"], r["error"], r, provenance,
-            ))
+            dlq_rows.append(
+                make_frame_dlq_row(
+                    video_id,
+                    slide,
+                    r["stage"],
+                    r["reason_code"],
+                    r["error"],
+                    r,
+                    provenance,
+                )
+            )
             continue
 
         kept = clean_boxes(r["boxes"], r["image_h"], params)
@@ -322,10 +371,20 @@ def build_slide_rows(
         try:
             SlideRow.model_validate(row)
         except ValidationError as e:
-            detail = "; ".join(f"{'.'.join(map(str, err['loc']))}: {err['msg']}" for err in e.errors())
-            dlq_rows.append(make_frame_dlq_row(
-                video_id, slide, "validate", reason_code_for(e), detail, r, provenance,
-            ))
+            detail = "; ".join(
+                f"{'.'.join(map(str, err['loc']))}: {err['msg']}" for err in e.errors()
+            )
+            dlq_rows.append(
+                make_frame_dlq_row(
+                    video_id,
+                    slide,
+                    "validate",
+                    reason_code_for(e),
+                    detail,
+                    r,
+                    provenance,
+                )
+            )
             continue
 
         # branch 3: good row
@@ -335,5 +394,7 @@ def build_slide_rows(
 
     metrics["ok"] = len(ok_rows)
     metrics["dlq"] = len(dlq_rows)
-    metrics["quarantined"] = sum(1 for row in ok_rows if row["quality_flag"] == "quarantine")
+    metrics["quarantined"] = sum(
+        1 for row in ok_rows if row["quality_flag"] == "quarantine"
+    )
     return ok_rows, dlq_rows, metrics

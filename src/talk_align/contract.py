@@ -31,6 +31,7 @@ def reason_code_for(err: ValidationError) -> str:
         else:
             return "SCHEMA_VIOLATION"
 
+
 class SlideRow(BaseModel):
     """One row of the slides table (spec §4). Text may be empty: image-only slide."""
 

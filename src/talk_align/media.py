@@ -11,9 +11,13 @@ def probe_duration(video_path: Path) -> float:
     Output: 344.561
     """
     cmd = [
-        "ffprobe", "-v", "error",
-        "-show_entries", "format=duration",
-        "-of", "default=noprint_wrappers=1:nokey=1",
+        "ffprobe",
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
         str(video_path),
     ]
     result = subprocess.run(cmd, check=True, capture_output=True, text=True)

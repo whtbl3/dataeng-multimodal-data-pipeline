@@ -39,7 +39,9 @@ class FrameParams:
     scene_threshold: float = 0.15
     min_duration: float = 1.5  # marks closer than this are merged
     min_box_chars: int = 3  # OCR boxes shorter than this are junk
-    min_box_height_ratio: float = 0.03  # box height / image height below this is junk (footer 0.026)
+    min_box_height_ratio: float = (
+        0.03  # box height / image height below this is junk (footer 0.026)
+    )
 
 
 KEYFRAME_DIR = DATA_DIR / "keyframes"
