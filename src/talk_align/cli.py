@@ -8,6 +8,7 @@ import sys
 import uuid
 from dataclasses import asdict
 from datetime import datetime
+from importlib.metadata import version
 from pathlib import Path
 
 import duckdb
@@ -16,6 +17,7 @@ from talk_align import store
 from talk_align.audio_lane import build_rows, transcribe
 from talk_align.config import BASE_DIR, DB_PATH, OUT_DIR, AudioParams, FrameParams
 from talk_align.frame_lane import (
+    build_slide_rows,
     build_slide_spans,
     detect_scene_times,
     extract_keyframes,
@@ -68,17 +70,20 @@ def git_code_version() -> str:
     return f"{commit}-dirty" if changes else commit
 
 
-def build_provenance(video_path: Path, params: AudioParams) -> dict:
-    provenance = {
-        "model": "faster-whisper",
-        "model_version": params.model,
+def build_provenance(video_path: Path, model: str, model_version: str, params) -> dict:
+    """Who made these rows: model, its version, every param that changes output, code, run.
+
+    params: any dataclass (AudioParams, FrameParams); asdict keeps provenance and the run in sync.
+    """
+    return {
+        "model": model,
+        "model_version": model_version,
         "params": json.dumps(asdict(params), sort_keys=True),
         "source_hash": file_sha256(video_path),
         "run_id": str(uuid.uuid4()),
         "code_version": git_code_version(),
         "processed_at": datetime.now(),
     }
-    return provenance
 
 
 def main(argv=None):
@@ -111,7 +116,7 @@ def main(argv=None):
         video_id: str = video_path.stem
 
         params = AudioParams()
-        provenance = build_provenance(video_path, params)
+        provenance = build_provenance(video_path, "faster-whisper", params.model, params)
 
         raw_segments, duration = transcribe(video_path, params)
 
@@ -134,17 +139,22 @@ def main(argv=None):
     elif args.command == "export":
         conn = store.connect(db_path=DB_PATH)
         video_id = args.video_id
-        run_id = conn.execute(
+        runs = conn.execute(
             """
-            SELECT any_value(run_id) 
-            FROM (SELECT provenance.run_id AS run_id FROM audio_segments WHERE video_id = ? 
-                UNION ALL 
-                SELECT provenance.run_id AS run_id FROM dlq_audio WHERE video_id = ?
-            )""",
-            [video_id, video_id],
-        ).fetchone()[0]
-        if run_id is None:
+            SELECT DISTINCT provenance.run_id, provenance.processed_at FROM audio_segments WHERE video_id = $v
+            UNION
+            SELECT DISTINCT provenance.run_id, provenance.processed_at FROM dlq_audio WHERE video_id = $v
+            UNION
+            SELECT DISTINCT provenance.run_id, provenance.processed_at FROM slides WHERE video_id = $v
+            UNION
+            SELECT DISTINCT provenance.run_id, provenance.processed_at FROM dlq_frame WHERE video_id = $v
+            """,
+            {"v": video_id},
+        ).fetchall()                                   # [(run_id, processed_at), ...]
+        if not runs:
             parser.error(f"No rows for video_id: {video_id}")
+        # latest run; run_id breaks a tie so the choice is always the same
+        run_id = max(runs, key=lambda r: (r[1], r[0]))[0]
         out_dir = args.out or OUT_DIR / run_id
         output_path = store.export_parquet(conn, video_id, out_dir)
         conn.close()
@@ -157,12 +167,21 @@ def main(argv=None):
         params = FrameParams()
         duration = probe_duration(video_path)
         times = detect_scene_times(video_path, params)
-        spans, metrics = build_slide_spans(times, duration, params.min_duration)
+        spans, span_metrics = build_slide_spans(times, duration, params.min_duration)
         planned = plan_keyframes(video_id, spans)
         extract_keyframes(video_path, video_id, planned)
         raw_ocr = ocr_keyframes(planned)
-        for slide_id, r in raw_ocr.items():
-            print(slide_id, r["image_h"], len(r["boxes"]))
+        provenance = build_provenance(
+            video_path, "rapidocr_onnxruntime", version("rapidocr_onnxruntime"), params
+        )
+        ok_rows, dlq_rows, metrics = build_slide_rows(video_id, planned, raw_ocr, params, provenance)
+
+        # frame lane only: audio_segments / dlq_audio of this video stay untouched (spec §3)
+        conn = store.connect(db_path=DB_PATH)
+        store.overwrite_video_tables(conn, video_id, {"slides": ok_rows, "dlq_frame": dlq_rows})
+        conn.close()
+
+        print({**span_metrics, **metrics})
 
     return 0
 
