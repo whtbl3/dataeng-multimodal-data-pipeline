@@ -7,6 +7,7 @@ metrics. `run` (roadmap #6) calls the three steps with ONE run_id.
 import hashlib
 import json
 import subprocess
+import traceback
 import uuid
 from dataclasses import asdict
 from datetime import datetime
@@ -160,3 +161,45 @@ def run_align(video_id: str, run_id: str, db_path: Path | str = DB_PATH) -> dict
     finally:
         conn.close()
     return metrics
+
+
+def run_all(video_path: Path, run_id: str, db_path: Path | str = DB_PATH) -> dict:
+    """Run audio, frames, then align with ONE run_id. A failing lane never stops the other.
+
+    Output: {"run_id", "video_id", "status", "audio": {...}, "frames": {...}, "align": {...}}
+            a failed step holds {"error", "traceback"}, a skipped one {"skipped": reason}
+    status: "success" all three ok · "failed" audio AND frames failed · else "partial"
+    """
+    video_id = video_path.stem
+    result: dict = {"run_id": run_id, "video_id": video_id}
+
+    # Catching Exception is right HERE: this layer's job is "run each step, record what
+    # broke". The error is not hidden: it is stored, status is not success, exit code is 1.
+    for lane, step in (("audio", run_audio), ("frames", run_frames)):
+        try:
+            result[lane] = step(video_path, run_id, db_path=db_path)
+        except Exception as e:  # noqa: BLE001 - orchestration: record and go on
+            result[lane] = {
+                "error": f"{type(e).__name__}: {e}",
+                "traceback": traceback.format_exc(),
+            }
+
+    failed = [lane for lane in ("audio", "frames") if "error" in result[lane]]
+    if failed:
+        result["align"] = {"skipped": f"{' and '.join(failed)} failed"}
+    else:
+        try:
+            result["align"] = run_align(video_id, run_id, db_path=db_path)
+        except Exception as e:  # noqa: BLE001
+            result["align"] = {
+                "error": f"{type(e).__name__}: {e}",
+                "traceback": traceback.format_exc(),
+            }
+
+    if len(failed) == 2:
+        result["status"] = "failed"
+    elif failed or "error" in result["align"]:
+        result["status"] = "partial"
+    else:
+        result["status"] = "success"
+    return result

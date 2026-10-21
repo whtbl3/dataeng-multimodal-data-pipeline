@@ -36,6 +36,9 @@ def build_parser() -> argparse.ArgumentParser:
     export = sub.add_parser("export", help="Export processed data as parquet files")
     export.add_argument("video_id", help="ID of the video to export")
     export.add_argument("-o", "--out", type=Path, help="Output directory")
+
+    run = sub.add_parser("run", help="Run audio, frames and align with one run_id")
+    run.add_argument("video", type=Path, help="Path to input video file")
     return parser
 
 
@@ -81,6 +84,22 @@ def main(argv=None) -> int:
         paths = store.export_parquet(conn, video_id, out_dir)
         conn.close()
         print(paths)
+    elif args.command == "run":
+        video_path = resolve_video(parser, args.video)
+        result = pipeline.run_all(video_path, pipeline.new_run_id())
+        print(f"run_id: {result['run_id']}  status: {result['status']}")
+        for step in ("audio", "frames", "align"):
+            r = result[step]
+            if "error" in r:
+                print(f"  {step}: ERROR {r['error']}")
+                print(
+                    r["traceback"], file=sys.stderr
+                )  # full traceback only when it failed
+            elif "skipped" in r:
+                print(f"  {step}: skipped ({r['skipped']})")
+            else:
+                print(f"  {step}: {r}")
+        return 0 if result["status"] == "success" else 1
 
     return 0
 
