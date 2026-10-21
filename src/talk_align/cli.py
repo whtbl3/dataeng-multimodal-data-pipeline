@@ -14,6 +14,7 @@ from pathlib import Path
 import duckdb
 
 from talk_align import store
+from talk_align.align import align_video
 from talk_align.audio_lane import build_rows, transcribe
 from talk_align.config import BASE_DIR, DB_PATH, OUT_DIR, AudioParams, FrameParams
 from talk_align.frame_lane import (
@@ -106,6 +107,9 @@ def main(argv=None):
     # Subcommand: Frames
     frame_parser = subparser.add_parser("frames", help="Extract one keyframe per slide")
     frame_parser.add_argument("video", type=Path, help="Path to input video file")
+    # Subcommand: Align
+    align_parser = subparser.add_parser("align", help="Match each audio segment to one slide")
+    align_parser.add_argument("video_id", help="ID of the video to align")
 
     args = parser.parse_args(argv)
     if args.command == "audio":
@@ -188,6 +192,12 @@ def main(argv=None):
         conn.close()
 
         print({**span_metrics, **metrics})
+    
+    elif args.command == "align":
+        conn = store.connect(db_path=DB_PATH)
+        rows = align_video(conn, args.video_id)
+        conn.close()
+        print(len(rows))
 
     return 0
 
