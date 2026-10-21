@@ -1,6 +1,8 @@
+from pathlib import Path
+
 import pytest
 
-from talk_align import pipeline
+from talk_align import cli, pipeline
 from talk_align.cli import main
 
 
@@ -32,3 +34,22 @@ def test_run_exit_code_is_1_when_not_success(monkeypatch, tmp_path):
         },
     )
     assert main(["run", str(video)]) == 1
+
+
+def test_report_without_any_run_is_a_clean_error(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(cli, "DB_PATH", tmp_path / "t.duckdb")
+    with pytest.raises(SystemExit) as exc:
+        main(["report", "khong_co"])
+    assert exc.value.code == 2
+    assert "No run recorded for khong_co" in capsys.readouterr().err
+
+
+def test_report_prints_the_latest_run(monkeypatch, tmp_path, capsys):
+    db = tmp_path / "t.duckdb"
+    monkeypatch.setattr(cli, "DB_PATH", db)
+    for lane in ("run_audio", "run_frames", "run_align"):
+        monkeypatch.setattr(pipeline, lane, lambda *a, **k: {"ok": 1})
+    pipeline.run_all(Path("v.mp4"), "run-1", db_path=db)
+    assert main(["report", "v"]) == 0
+    out = capsys.readouterr().out
+    assert "# Run report: v" in out and "run-1" in out

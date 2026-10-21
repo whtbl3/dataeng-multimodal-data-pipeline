@@ -9,6 +9,7 @@ from pathlib import Path
 
 from talk_align import pipeline, store
 from talk_align.config import DB_PATH, OUT_DIR
+from talk_align.report import render_report
 
 
 def resolve_video(parser: argparse.ArgumentParser, video_path: Path) -> Path:
@@ -39,7 +40,22 @@ def build_parser() -> argparse.ArgumentParser:
 
     run = sub.add_parser("run", help="Run audio, frames and align with one run_id")
     run.add_argument("video", type=Path, help="Path to input video file")
+
+    report = sub.add_parser("report", help="Print the report of the latest run")
+    report.add_argument("video_id", help="ID of the video to report on")
     return parser
+
+
+def latest_report(video_id: str, db_path: Path | str) -> tuple[dict, str] | None:
+    """(runs row, Markdown) of the latest run of a video, or None if it was never `run`."""
+    conn = store.connect(db_path)
+    try:
+        run = store.latest_run(conn, video_id)
+        if run is None:
+            return None
+        return run, render_report(run, store.dlq_reason_counts(conn, video_id))
+    finally:
+        conn.close()
 
 
 def main(argv=None) -> int:
@@ -84,6 +100,26 @@ def main(argv=None) -> int:
         paths = store.export_parquet(conn, video_id, out_dir)
         conn.close()
         print(paths)
+
+        found = latest_report(video_id, DB_PATH)
+        if found is None:
+            print("report.md skipped: no run recorded (use talk-align run)")
+        else:
+            report_run, text = found
+            (out_dir / "report.md").write_text(text, encoding="utf-8")
+            print(out_dir / "report.md")
+            if report_run["run_id"] != run_id:
+                # data came from single-lane commands newer than the last `run`
+                print(
+                    f"note: report.md is run {report_run['run_id']}, data is run {run_id}"
+                )
+
+    elif args.command == "report":
+        found = latest_report(args.video_id, DB_PATH)
+        if found is None:
+            parser.error(f"No run recorded for {args.video_id} (use talk-align run)")
+        print(found[1])
+
     elif args.command == "run":
         video_path = resolve_video(parser, args.video)
         result = pipeline.run_all(video_path, pipeline.new_run_id())
