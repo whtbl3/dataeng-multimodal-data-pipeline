@@ -1,5 +1,6 @@
 """DuckDB storage: schema, write strategies and Parquet export (spec §4). Roadmap #1."""
 
+import json
 from pathlib import Path
 
 import duckdb
@@ -119,7 +120,9 @@ def overwrite_video_tables(
             conn.execute(f"DELETE FROM {table} WHERE video_id=?", [video_id])
             if len(rows) > 0:
                 insert_rows(conn, table, rows)
-                conn.commit()
+        # once, after every table: commit inside the loop never ran when all lists were
+        # empty, so the DELETE was dropped on close and old rows survived
+        conn.commit()
     except Exception:
         conn.rollback()
         raise
@@ -132,8 +135,46 @@ def overwrite_video(
     overwrite_video_tables(conn, video_id, tables)
 
 
+def latest_run(conn: duckdb.DuckDBPyConnection, video_id: str) -> dict | None:
+    """The most recent runs row of a video, params/metrics parsed from JSON; None if none.
+
+    Output: {"run_id": "1801...", "status": "success", "started_at": datetime(...), ...,
+             "params": {...}, "metrics": {"audio": {...}, ..., "summary": {...}}}
+    """
+    rel = conn.execute(
+        "SELECT * FROM runs WHERE video_id = ? ORDER BY started_at DESC, run_id DESC LIMIT 1",
+        [video_id],
+    )
+    cols = [d[0] for d in rel.description]
+    found = rel.fetchone()
+    if found is None:
+        return None
+    run = dict(zip(cols, found))
+    for key in ("params", "metrics"):
+        # JSON columns come back as str; a "running" row still has metrics NULL
+        run[key] = json.loads(run[key]) if run[key] else {}
+    return run
+
+
+def dlq_reason_counts(conn: duckdb.DuckDBPyConnection, video_id: str) -> dict[str, int]:
+    """DLQ rows of a video per table and reason_code, e.g. {"dlq_audio/EMPTY_TEXT": 2}.
+
+    Reads the tables as they are now, i.e. the latest write of each lane.
+    """
+    rows = conn.execute(
+        """
+        SELECT 'dlq_audio/' || reason_code AS k, count(*) FROM dlq_audio WHERE video_id = $v GROUP BY 1
+        UNION ALL
+        SELECT 'dlq_frame/' || reason_code, count(*) FROM dlq_frame WHERE video_id = $v GROUP BY 1
+        ORDER BY 1
+        """,
+        {"v": video_id},
+    ).fetchall()
+    return dict(rows)
+
+
 def export_parquet(
-    conn: duckdb.DuckDBPyConnection, video_id: str, out_dir: Path | None = None
+    conn: duckdb.DuckDBPyConnection, video_id: str, out_dir: Path
 ) -> dict[str, Path]:
     """Write one Parquet file per table with the rows of `video_id`, sorted by primary key."""
     EXPORT_TABLES = {

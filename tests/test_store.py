@@ -254,3 +254,77 @@ def test_frame_write_keeps_audio_rows():
     audio = con.execute("SELECT count(*) FROM audio_segments").fetchone()[0]
     con.close()
     assert audio == 2  # frame lane does not wipe the audio lane
+
+
+def test_overwrite_with_only_empty_tables_still_deletes(tmp_path):
+    # commit used to sit inside `if rows:`, so with every list empty the DELETE was
+    # never committed and the old rows were back after reopening the file
+    db = tmp_path / "t.duckdb"
+    con = store.connect(db)
+    store.overwrite_video_tables(
+        con, "v", {"audio_segments": rows_at("v", [1.0]), "dlq_audio": []}
+    )
+    store.overwrite_video_tables(con, "v", {"audio_segments": [], "dlq_audio": []})
+    con.close()
+    con = store.connect(db)
+    assert con.execute("SELECT count(*) FROM audio_segments").fetchone()[0] == 0
+    con.close()
+
+
+def run_row(run_id, started_minute, **over):
+    from datetime import datetime
+
+    row = {
+        "run_id": run_id,
+        "video_id": "v",
+        "started_at": datetime(2026, 10, 21, 15, started_minute),
+        "finished_at": None,
+        "status": "running",
+        "code_version": "abc1234",
+        "params": json.dumps({"audio": {}}),
+        "metrics": None,
+    }
+    return {**row, **over}
+
+
+def test_latest_run_picks_newest_and_parses_json():
+    con = store.connect(":memory:")
+    store.upsert_rows(con, "runs", [run_row("r1", 0)])
+    store.upsert_rows(
+        con,
+        "runs",
+        [
+            run_row(
+                "r2", 5, status="success", metrics=json.dumps({"summary": {"weak": 0}})
+            )
+        ],
+    )
+    run = store.latest_run(con, "v")
+    assert run["run_id"] == "r2"
+    assert run["metrics"] == {"summary": {"weak": 0}}  # dict, not str
+    con.close()
+
+
+def test_latest_run_of_a_running_row_has_empty_metrics():
+    con = store.connect(":memory:")
+    store.upsert_rows(con, "runs", [run_row("r1", 0)])
+    assert store.latest_run(con, "v")["metrics"] == {}  # NULL in the table
+    assert store.latest_run(con, "w") is None
+    con.close()
+
+
+def test_dlq_reason_counts_per_table():
+    con = store.connect(":memory:")
+    _, dlq, _ = build_rows(
+        "v",
+        [
+            make_seg(start=1.0, text="", no_speech_prob=0.1),
+            make_seg(start=3.0, text="", no_speech_prob=0.1),
+        ],
+        600.0,
+        PROVENANCE,
+    )
+    store.overwrite_video_tables(con, "v", {"dlq_audio": dlq})
+    assert store.dlq_reason_counts(con, "v") == {"dlq_audio/EMPTY_TEXT": 2}
+    assert store.dlq_reason_counts(con, "w") == {}
+    con.close()
