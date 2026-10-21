@@ -163,18 +163,39 @@ def run_align(video_id: str, run_id: str, db_path: Path | str = DB_PATH) -> dict
     return metrics
 
 
+def save_run(db_path: Path | str, run_row: dict) -> None:
+    """Upsert one runs row. Open and close at once: never hold DuckDB during Whisper."""
+    conn = store.connect(db_path)
+    try:
+        store.upsert_rows(conn, "runs", [run_row])
+    finally:
+        conn.close()
+
+
 def run_all(video_path: Path, run_id: str, db_path: Path | str = DB_PATH) -> dict:
     """Run audio, frames, then align with ONE run_id. A failing lane never stops the other.
 
-    Output: {"run_id", "video_id", "status", "audio": {...}, "frames": {...}, "align": {...}}
-            a failed step holds {"error", "traceback"}, a skipped one {"skipped": reason}
-    status: "success" all three ok · "failed" audio AND frames failed · else "partial"
+    runs table is written twice: "running" before, the final status after. A killed run
+    (Ctrl+C, OOM kill) keeps its "running" row with finished_at NULL, so it is visible.
     """
     video_id = video_path.stem
+    run_row = {
+        "run_id": run_id,
+        "video_id": video_id,
+        "started_at": datetime.now(),
+        "finished_at": None,
+        "status": "running",
+        "code_version": git_code_version(),
+        "params": json.dumps(
+            {"audio": asdict(AudioParams()), "frames": asdict(FrameParams())},
+            sort_keys=True,
+        ),
+        "metrics": None,
+    }
+    save_run(db_path, run_row)  # ① before: a trace even if we never reach the end
+
     result: dict = {"run_id": run_id, "video_id": video_id}
 
-    # Catching Exception is right HERE: this layer's job is "run each step, record what
-    # broke". The error is not hidden: it is stored, status is not success, exit code is 1.
     for lane, step in (("audio", run_audio), ("frames", run_frames)):
         try:
             result[lane] = step(video_path, run_id, db_path=db_path)
@@ -202,4 +223,11 @@ def run_all(video_path: Path, run_id: str, db_path: Path | str = DB_PATH) -> dic
         result["status"] = "partial"
     else:
         result["status"] = "success"
+
+    run_row["finished_at"] = datetime.now()  # ② after: same run_id -> replaces row ①
+    run_row["status"] = result["status"]
+    run_row["metrics"] = json.dumps(
+        {step: result[step] for step in ("audio", "frames", "align")}, default=str
+    )
+    save_run(db_path, run_row)
     return result

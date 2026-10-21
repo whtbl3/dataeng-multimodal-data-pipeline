@@ -221,7 +221,7 @@ def test_schema_has_all_tables():
     dlq_a = [r[:2] for r in con.execute("DESCRIBE dlq_audio").fetchall()]
     dlq_f = [r[:2] for r in con.execute("DESCRIBE dlq_frame").fetchall()]
     con.close()
-    assert tables == {"audio_segments", "dlq_audio", "slides", "dlq_frame", "aligned"}
+    assert tables == {"audio_segments", "dlq_audio", "slides", "dlq_frame", "aligned", "runs"}
     assert slide_cols == set(
         slide_rows()[0][0]
     )  # schema == the keys build_slide_rows makes

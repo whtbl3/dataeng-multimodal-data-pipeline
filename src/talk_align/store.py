@@ -74,6 +74,18 @@ def create_schema(conn: duckdb.DuckDBPyConnection) -> None:
         run_id              VARCHAR NOT NULL
     )
     """)
+    conn.execute("""
+    CREATE TABLE IF NOT EXISTS runs (
+        run_id        VARCHAR PRIMARY KEY,
+        video_id      VARCHAR NOT NULL,
+        started_at    TIMESTAMP NOT NULL,
+        finished_at   TIMESTAMP,              -- NULL while running (or killed)
+        status        VARCHAR NOT NULL,       -- running | success | partial | failed
+        code_version  VARCHAR NOT NULL,
+        params        JSON,
+        metrics       JSON
+    )
+    """)
     conn.execute(f"CREATE TABLE IF NOT EXISTS dlq_audio ({dlq_columns})")
     conn.execute(f"CREATE TABLE IF NOT EXISTS dlq_frame ({dlq_columns})")
 
@@ -84,11 +96,18 @@ def connect(db_path) -> duckdb.DuckDBPyConnection:
     return conn
 
 
-def insert_rows(conn: duckdb.DuckDBPyConnection, table: str, rows: list[dict]) -> None:
+def insert_rows(
+    conn: duckdb.DuckDBPyConnection, table: str, rows: list[dict], verb: str = "INSERT"
+) -> None:
     cols = list(rows[0])
-    sql = f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({', '.join('?' for _ in cols)})"
+    sql = f"{verb} INTO {table} ({', '.join(cols)}) VALUES ({', '.join('?' for _ in cols)})"
     values = [[r[c] for c in cols] for r in rows]
     conn.executemany(sql, values)
+
+
+def upsert_rows(conn: duckdb.DuckDBPyConnection, table: str, rows: list[dict]) -> None:
+    """Insert, or replace the row with the same primary key. For history tables (runs)."""
+    insert_rows(conn, table, rows, verb="INSERT OR REPLACE")
 
 
 def overwrite_video_tables(
