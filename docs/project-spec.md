@@ -87,11 +87,18 @@ quality_flag, keyframe_path, raw_payload, provenance`
   Mốc cuối so với `duration` (fade về đen cuối video bị gộp). Mốc `0.0` không bao giờ bị
   bỏ; mốc cách `0.0` < `min_duration` thì bỏ mốc đó. Bất biến: slide lát kín
   `[0, duration)` và mọi slide dài ≥ `min_duration`.
-- `text`: chữ OCR của các box đã lọc, sắp từ trên xuống, trái sang phải.
+- `text`: chữ OCR của các box đã lọc (strip), nối bằng `"\n"`, sắp theo `(y trên, x trái)`.
+  Hạn chế: slide 2 cột bị xen dòng giữa 2 cột.
 - Lọc box rác trước khi tính điểm: dưới `min_box_chars` (3) ký tự hoặc thấp hơn
-  `min_box_height_ratio` chiều cao frame (logo, số trang).
+  `min_box_height_ratio` (0.03) chiều cao frame. Trên `lakehouse`: footer bản quyền cao
+  0.026, chữ thật nhỏ nhất 0.032 → khoảng cách hẹp, calibrate lại ở #9.
 - `quality_score = Σ(confidence × số ký tự) / Σ(số ký tự)` trên các box đã lọc.
-  Ngưỡng quarantine: **calibrate ở lần chạy đầu từ phân phối điểm**, tạm dùng 0.3.
+  Ngưỡng quarantine `SLIDE_QUARANTINE_THRESHOLD` riêng với audio: **calibrate ở lần chạy
+  đầu từ phân phối điểm**, tạm dùng 0.3. Lần chạy đầu: 12/12 slide điểm 0.963–0.996, nên
+  0.3 không bao giờ chạm; `conf` không phản ánh chữ dính liền ("Oneplatformtounify...").
+- OCR: `rapidocr_onnxruntime` (1.4.4, ghi phiên bản thật qua `importlib.metadata.version`).
+  Ảnh không đọc được (`LoadImageError`, `OSError`) → `dlq_frame` `CORRUPT_KEYFRAME`, stage
+  `ocr`; engine crash khi ảnh đọc được → `OCR_FAILED`. Bất biến: `slides_in == ok + dlq`.
 - `raw_payload`: JSON mọi box OCR (kể cả box bị lọc) với tọa độ, chữ, confidence.
 - `keyframe_path`: `data/keyframes/<video_id>/<slide_id>.png`, cắt ở **giữa** slide
   (`(t_start + t_end) / 2`), vì mốc chỉ chính xác 1 s nên tại `t_start` fade có thể chưa
@@ -213,6 +220,8 @@ data/out/<run_id>/            *.parquet + report.md
 | Join chỉ lọc quarantine phía audio; `aligned.slide_quality_flag` để người dùng tự lọc | Final | §4 `aligned` |
 | DLQ chỉ chứa lỗi xử lý; chất lượng kém → `quality_flag` | Final | docs/intent.md |
 | Whisper `small`, CPU int8, `temperature=0`, `language="en"` | Final | docs/tech-stack.md |
+| Mỗi lane là một lần chạy riêng (`run_id` riêng), ghi trong transaction riêng; `export` không `--out` chọn `run_id` có `processed_at` mới nhất trong 4 bảng | Final (đến roadmap #6 lệnh `run`) | learning-notes §15 |
+| Ngưỡng quarantine slide 0.3 không có tác dụng trên `lakehouse` (điểm ≥ 0.963); cần chỉ số khác cho chữ dính liền | Open | roadmap #9 |
 | Scene detect: lấy mẫu 1 fps + ngưỡng 0.15 (thay cho từng frame + 0.3); calibrate lại ở roadmap #9. Chấp nhận sót đổi chữ trong cùng slide | Final | learning-notes §13 |
 | Không làm CI/CD; `pytest` + `ruff` chạy local trước khi commit | Final | roadmap #10 |
 | Khóa `av<19`: av 19 bỏ `metadata_errors` mà faster-whisper 1.2.1 dùng | Final | docs/learning-notes.md §11 |

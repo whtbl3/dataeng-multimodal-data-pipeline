@@ -420,6 +420,54 @@ mốc   kế       khoảng   kết quả
   đổi nội dung trong cùng slide (`40s`, `91s` chỉ còn "Cons"): một ảnh giữa slide không
   chứa hết chữ của slide đó.
 
+## 15. Bài học khi làm roadmap #4 (2026-10-21)
+
+### OCR thật trên `lakehouse`
+```
+slide 91s (12 box)
+  h=45 conf=0.997 'Data Lakes'
+  h=33 conf=0.661 '小'                                         ← rác 1 ký tự
+  h=23 conf=0.977 'Structured,Semi-StructuredandUnstructuredData'  ← chữ thật nhỏ nhất: 23/720 = 0.032
+  h=19 conf=0.942 '2022Databricks Inc.—All rights reserved'   ← footer mọi slide: 19/720 = 0.026
+```
+- 0.4–1.5 s mỗi ảnh, RAM tối đa ~524 MB. Nạp model (`RapidOCR()`) một lần cho cả batch.
+- Ảnh không có chữ → `result` là `None`, không phải `[]` → `result or []`.
+- File mất / không phải ảnh: rapidocr báo `LoadImageError`; Pillow báo
+  `FileNotFoundError` / `UnidentifiedImageError` (đều là `OSError`).
+- Box ra dạng `[4 góc, text, conf]` kiểu Python thường; đổi sang dict có tên key ngay khi
+  đọc. Lưu `image_h` cùng box để output OCR tự đủ khi replay.
+- `Path` không `json.dump` được → `str()` trước khi ghi fixture.
+
+### Lọc và điểm
+- `conf` đo "ký tự có đúng không", không đo dấu cách: 12/12 slide điểm 0.963–0.996 dù có
+  "Oneplatformtounifyallyourdata", "BigData", "2000S". Ngưỡng 0.3 không bao giờ chạm.
+- Cân theo ký tự (ví dụ §3): trung bình thường 0.82, cân theo ký tự 0.85.
+- Slide rỗng: kiểm tra `Σ ký tự == 0` trước khi chia (tránh `ZeroDivisionError`) →
+  `text=""`, điểm 0, quarantine, không DLQ.
+- **Đừng test đúng ngưỡng khi ngưỡng là kết quả phép chia float:** `21.6 / 720 =
+  0.030000000000000002`, nên box được giữ dù viết `>=` hay `>`. Test hai giá trị rõ ràng
+  hai bên ngưỡng (21.0 → 0.0292, 22.0 → 0.0306). Và `len(...) == True` pass chỉ vì
+  `1 == True`.
+- `raw_payload` giữ cả box bị lọc: đổi ngưỡng lọc thì chạy lại `build_slide_rows`, không
+  OCR lại.
+
+### Lỗi thư viện ngoài
+- Được bắt `Exception` cho `OCR_FAILED` vì lỗi nằm trong engine (không biết trước loại),
+  nhưng `try` chỉ bọc đúng dòng gọi engine; phần đổi box sang dict nằm ngoài để bug của
+  mình vẫn crash.
+
+### Ghi và export
+- `dlq_audio`, `dlq_frame` dùng chung biến cột → thêm cột một chỗ.
+- `build_provenance(video_path, model, model_version, params)` chung cho 2 lane;
+  `model_version` của rapidocr lấy từ `importlib.metadata.version`, không viết cứng.
+- Ghi frame lane không đụng bảng audio (hai lane độc lập).
+- Export: mỗi lane có `run_id` riêng → chọn `run_id` có `processed_at` mới nhất trong 4
+  bảng; `any_value` cho thư mục đổi qua lại giữa các lần chạy.
+- Lỗi `run_id = run_id[0]` (dòng sót lại từ khi `fetchone()` trả tuple) lấy ký tự đầu của
+  UUID → thư mục `data/out/6/`. Đặt tên biến đúng kiểu dữ liệu (`row` vs `run_id`) giúp
+  tránh.
+- Kiểm tra slide lát kín bằng SQL: `LEAD(t_start) OVER (ORDER BY t_start)` → 0 khoảng hở.
+
 ## Câu hỏi tự kiểm tra
 
 | Câu hỏi | Test kiểm tra |
@@ -442,5 +490,10 @@ mốc   kế       khoảng   kết quả
 | Slide 0.4 s do chuyển cảnh xử lý ra sao, vì sao không vào DLQ? | `test_spec_example`, `test_every_slide_is_at_least_min_duration` |
 | Mốc 0.0 quá gần mốc kế tiếp thì bỏ mốc nào? | `test_zero_is_never_dropped` |
 | Có đoạn video nào không thuộc slide nào không? | `test_slides_tile_the_whole_video` |
-| Slide không có chữ vào đâu, vì sao không vào DLQ? | (roadmap #4) |
+| Slide không có chữ vào đâu, vì sao không vào DLQ? | `test_empty_slide_is_kept_as_quarantine`, `test_slide_with_no_boxes_is_kept_as_quarantine` |
+| Box nào bị lọc? Footer có bị lọc không? | `test_footer_and_short_junk_are_dropped` |
+| Vì sao điểm slide cân theo số ký tự? | `test_slide_quality_is_weighted_by_characters` |
+| Vì sao `raw_payload` giữ cả box bị lọc? | `test_raw_payload_keeps_dropped_boxes` |
+| Ảnh keyframe hỏng thì sao? Các slide khác có mất không? | `test_corrupt_keyframe_goes_to_dlq`, `test_error_entry_becomes_dlq_row_and_good_slides_survive` |
+| Chạy frame lane có xóa dữ liệu audio không? | `test_frame_write_keeps_audio_rows` |
 | Có dòng `nearest` trong `aligned` nghĩa là gì? | (roadmap #5) |
