@@ -28,6 +28,7 @@ from talk_align.frame_lane import (
     plan_keyframes,
 )
 from talk_align.media import probe_duration
+from talk_align.report import summarize
 
 
 class MissingInputError(Exception):
@@ -158,6 +159,22 @@ def run_align(video_id: str, run_id: str, db_path: Path | str = DB_PATH) -> dict
                 row
             )  # a violation is a bug in the align SQL: crash
         store.overwrite_video_tables(conn, video_id, {"aligned": rows})
+        p50_s, p95_s, p50_r, p95_r = conn.execute(
+            """
+            SELECT quantile_cont(align_gap_s, 0.5),
+                   quantile_cont(align_gap_s, 0.95),
+                   quantile_cont(align_gap_ratio, 0.5),
+                   quantile_cont(align_gap_ratio, 0.95)
+            FROM aligned WHERE video_id = ?
+            """,
+            [video_id],
+        ).fetchone()
+        metrics.update(
+            p50_align_gap_s=p50_s,
+            p95_align_gap_s=p95_s,
+            p50_align_gap_ratio=p50_r,
+            p95_align_gap_ratio=p95_r,
+        )
     finally:
         conn.close()
     return metrics
@@ -224,10 +241,12 @@ def run_all(video_path: Path, run_id: str, db_path: Path | str = DB_PATH) -> dic
     else:
         result["status"] = "success"
 
+    result["summary"] = summarize(result)
     run_row["finished_at"] = datetime.now()  # ② after: same run_id -> replaces row ①
     run_row["status"] = result["status"]
     run_row["metrics"] = json.dumps(
-        {step: result[step] for step in ("audio", "frames", "align")}, default=str
+        {step: result[step] for step in ("audio", "frames", "align", "summary")},
+        default=str,
     )
     save_run(db_path, run_row)
     return result

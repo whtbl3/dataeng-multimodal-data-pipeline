@@ -99,6 +99,8 @@ def main(argv=None) -> int:
                 print(f"  {step}: skipped ({r['skipped']})")
             else:
                 print(f"  {step}: {r}")
+        if "summary" in result:
+            print(f"  summary: {result['summary']}")
         return 0 if result["status"] == "success" else 1
 
     return 0
