@@ -142,7 +142,13 @@ def test_export_writes_one_sorted_file(
     )
     store.overwrite_video(con, "audio_segments", "talk02", rows_at("talk02", [1.0]))
     paths = store.export_parquet(con, "talk01", tmp_path)
-    assert set(paths) == {"audio_segments", "dlq_audio", "slides", "dlq_frame"}
+    assert set(paths) == {
+        "audio_segments",
+        "dlq_audio",
+        "slides",
+        "dlq_frame",
+        "aligned",
+    }
     exported = duckdb.sql(
         f"SELECT segment_id FROM '{paths['audio_segments']}'"
     ).fetchall()
@@ -208,14 +214,14 @@ def test_failure_in_dlq_rolls_back_audio_too():
     con.close()
 
 
-def test_schema_has_slides_and_dlq_frame():
+def test_schema_has_all_tables():
     con = store.connect(":memory:")
     tables = {r[0] for r in con.execute("SHOW TABLES").fetchall()}
     slide_cols = {r[0] for r in con.execute("DESCRIBE slides").fetchall()}
     dlq_a = [r[:2] for r in con.execute("DESCRIBE dlq_audio").fetchall()]
     dlq_f = [r[:2] for r in con.execute("DESCRIBE dlq_frame").fetchall()]
     con.close()
-    assert tables == {"audio_segments", "dlq_audio", "slides", "dlq_frame"}
+    assert tables == {"audio_segments", "dlq_audio", "slides", "dlq_frame", "aligned"}
     assert slide_cols == set(
         slide_rows()[0][0]
     )  # schema == the keys build_slide_rows makes

@@ -60,6 +60,20 @@ def create_schema(conn: duckdb.DuckDBPyConnection) -> None:
         provenance      {provenance_struct}
     )
     """)
+    conn.execute("""
+    CREATE TABLE IF NOT EXISTS aligned (
+        video_id            VARCHAR NOT NULL,
+        segment_id          VARCHAR PRIMARY KEY,
+        slide_id            VARCHAR NOT NULL,
+        match_type          VARCHAR NOT NULL,
+        overlap_s           DOUBLE  NOT NULL,
+        nearest_distance_s  DOUBLE,              -- NULL on overlap rows
+        align_gap_s         DOUBLE  NOT NULL,
+        align_gap_ratio     DOUBLE  NOT NULL,
+        slide_quality_flag  VARCHAR NOT NULL,
+        run_id              VARCHAR NOT NULL
+    )
+    """)
     conn.execute(f"CREATE TABLE IF NOT EXISTS dlq_audio ({dlq_columns})")
     conn.execute(f"CREATE TABLE IF NOT EXISTS dlq_frame ({dlq_columns})")
 
@@ -108,6 +122,7 @@ def export_parquet(
         "dlq_audio": "dlq_id",
         "slides": "slide_id",
         "dlq_frame": "dlq_id",
+        "aligned": "segment_id",
     }
     out_dir.mkdir(parents=True, exist_ok=True)
     written: dict[str, Path] = {}

@@ -153,3 +153,24 @@ def test_slide_quality_flag_is_carried_not_filtered():
     con.close()
     # quarantined slide is still matched (no fake nearest), the flag is just copied
     assert len(rows) == 1 and rows[0]["slide_quality_flag"] == "quarantine"
+
+
+def test_aligned_rows_are_written_and_replaced():
+    con = store.connect(":memory:")
+    put_audio(con, "v", [(1.0, 3.0), (5.0, 8.0)])
+    put_slides(con, "v", [(0.0, 4.0), (4.0, 10.0)])
+    rows, _ = align_video(con, "v")
+    rows = [{**r, "video_id": "v", "run_id": "run-1"} for r in rows]
+    store.overwrite_video_tables(con, "v", {"aligned": rows})
+
+    put_slides(con, "v", [(0.0, 10.0)])  # frame lane runs again: only 1 slide now
+    rows, _ = align_video(con, "v")
+    rows = [{**r, "video_id": "v", "run_id": "run-2"} for r in rows]
+    store.overwrite_video_tables(con, "v", {"aligned": rows})
+
+    got = con.execute(
+        "SELECT count(DISTINCT slide_id), count(*), count(DISTINCT run_id) FROM aligned"
+    ).fetchone()
+    con.close()
+    # both segments now point to v_s_00000000; nothing from run-1 survives
+    assert got == (1, 2, 1)

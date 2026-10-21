@@ -154,6 +154,16 @@ nearest_distance_s, slide_quality_flag, run_id`
   (NULL ở dòng `overlap`).
 - Slides lát kín timeline từ t=0, nên dòng `nearest` chỉ xuất hiện khi frame lane mất
   slide. Đó là tín hiệu frame lane có vấn đề.
+- Đã cài bằng **một** truy vấn: JOIN mọi slide cùng `video_id` (không lọc chồng nhau),
+  `overlap` âm = âm của khoảng cách, nên `ORDER BY overlap DESC, slide t_start DESC,
+  slide_id` chọn slide chồng nhiều nhất, hoặc slide gần nhất khi không chồng, cùng một luật
+  hòa. `overlap_s = GREATEST(overlap, 0)`, `nearest_distance_s = -overlap` khi `overlap ≤ 0`.
+  Chi phí: số câu × số slide dòng trung gian (78 × 12 trên `lakehouse`).
+- Bất biến: mọi audio `ok` có đúng 1 dòng `aligned`. Không chia cho 0 ở `align_gap_ratio`
+  vì `INVALID_TIME_RANGE` (roadmap #2) đã loại câu dài ≤ 0.
+- `AlignedRow` (Pydantic) kiểm tra trước khi ghi; vi phạm là bug SQL nên **crash**, không
+  có DLQ cho bước này. `run_id` mới mỗi lần chạy `align`. Thiếu audio hoặc slide → CLI báo
+  lỗi thay vì ghi 0 dòng.
 
 ### `runs` (PK `run_id`)
 `run_id, video_id, started_at, finished_at, status, code_version, params, metrics`

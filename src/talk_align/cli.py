@@ -17,6 +17,7 @@ from talk_align import store
 from talk_align.align import align_video
 from talk_align.audio_lane import build_rows, transcribe
 from talk_align.config import BASE_DIR, DB_PATH, OUT_DIR, AudioParams, FrameParams
+from talk_align.contract import AlignedRow
 from talk_align.frame_lane import (
     build_slide_rows,
     build_slide_spans,
@@ -197,7 +198,26 @@ def main(argv=None):
 
     elif args.command == "align":
         conn = store.connect(db_path=DB_PATH)
-        rows, metrics = align_video(conn, args.video_id)
+        video_id = args.video_id
+        n_audio = conn.execute(
+            "SELECT count(*) FROM audio_segments WHERE video_id = ?", [video_id]
+        ).fetchone()[0]
+        n_slides = conn.execute(
+            "SELECT count(*) FROM slides WHERE video_id = ?", [video_id]
+        ).fetchone()[0]
+        if n_audio == 0 or n_slides == 0:
+            conn.close()
+            parser.error(
+                f"video_id {video_id}: {n_audio} audio rows, {n_slides} slides "
+                "(run `talk-align audio` and `talk-align frames` first)"
+            )
+
+        rows, metrics = align_video(conn, video_id)
+        run_id = str(uuid.uuid4())  # one align run
+        rows = [{**r, "video_id": video_id, "run_id": run_id} for r in rows]
+        for row in rows:
+            AlignedRow.model_validate(row)  # bug in the SQL -> crash, no DLQ
+        store.overwrite_video_tables(conn, video_id, {"aligned": rows})
         conn.close()
         print(metrics)
 

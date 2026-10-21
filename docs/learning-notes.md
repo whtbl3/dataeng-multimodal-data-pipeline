@@ -468,6 +468,61 @@ slide 91s (12 box)
   tránh.
 - Kiểm tra slide lát kín bằng SQL: `LEAD(t_start) OVER (ORDER BY t_start)` → 0 khoảng hở.
 
+## 16. Bài học khi làm roadmap #5 (2026-10-21)
+
+### Interval join
+- Chồng nhau với khoảng nửa mở: `a.t_start < s.t_end AND a.t_end > s.t_start`; chỉ chạm
+  biên (`[0, 6)` và `[6, 14)`) không tính.
+- `a.video_id = s.video_id` bắt buộc: thiếu thì câu của video A ghép với slide video B.
+- Trên `lakehouse`: 78 câu × 12 slide → 83 cặp chồng; 5 câu vắt qua mốc chuyển slide
+  (5, 13, 88, 145, 337 s). Không có hòa, không có nearest → tie-break và nearest chỉ kiểm
+  được bằng dữ liệu tự tạo.
+
+### Chọn 1 slide mỗi câu
+- `ROW_NUMBER() OVER (PARTITION BY segment_id ORDER BY ...)` đánh số trong từng nhóm, không
+  gộp dòng như `GROUP BY`. `WHERE` không lọc được window function (chạy trước khi đánh số)
+  → bọc thêm `SELECT`, hoặc `QUALIFY` của DuckDB.
+- `ORDER BY` phải đủ để không bao giờ hòa (`overlap DESC, slide t_start DESC, slide_id`).
+  Thử bỏ `t_start DESC`: test hòa fail vì `slide_id` theo thứ tự chữ chọn slide trước.
+- CTE (`WITH pairs AS (...)`) đặt tên cho bảng trung gian, câu SQL dài dễ đọc.
+
+### Nearest bằng cùng một luật
+```
+câu [12, 14), slide [0, 10):  LEAST(14,10) − GREATEST(12,0)  = −2   (cách 2 s)
+              slide [20, 30): LEAST(14,30) − GREATEST(12,20) = −6   (cách 6 s)
+```
+`overlap` âm = âm khoảng cách → bỏ điều kiện chồng khỏi JOIN, giữ nguyên `ORDER BY overlap
+DESC`: slide chồng (overlap > 0) luôn thắng slide không chồng; không chồng thì slide gần
+nhất thắng; hòa cùng luật. Một truy vấn thay cho hai truy vấn + `UNION ALL`.
+- `CASE WHEN ... THEN ... END` không `ELSE` → `NULL` cho dòng không thỏa
+  (`nearest_distance_s` ở dòng overlap).
+- Bất biến "mọi câu ok có đúng 1 dòng": với JOIN có điều kiện chồng, câu nằm trong khoảng
+  hở biến mất mà không báo.
+
+### Độ lệch
+```
+câu         dài  overlap  gap_s  ratio
+[5, 13)     8    7        1      0.125
+[88, 93)    5    3        2      0.4     ← lệch nhất, chưa weak (> 0.5 mới weak)
+```
+- Dòng nearest: `align_gap_s` = độ dài câu, ratio = 1 → luôn weak; `nearest_distance_s`
+  mới cho biết xa bao nhiêu.
+- Không chia cho 0 vì contract roadmap #2 đã loại câu có `t_end <= t_start`: bước sau tin
+  được bước trước.
+- Slide quarantine không bị lọc, chỉ mang theo `slide_quality_flag` (lọc slide sẽ sinh
+  nearest giả).
+
+### Contract không có DLQ
+- `AlignedRow` vi phạm = bug trong SQL của mình (đầu vào đã qua contract #2, #4) → để crash,
+  giống `NameError`, không cất vào DLQ.
+- CLI kiểm tra video có audio và slide trước khi ghép; không thì `align` ghi 0 dòng mà
+  trông như thành công.
+
+### Kết quả đọc bằng mắt
+`JOIN aligned USING (segment_id) JOIN slides USING (slide_id)`: "In the late 1980s..." ↔
+slide "1980s"; "Data warehouses were designed..." ↔ "Data warehouse"; câu 88 s ("where
+structured, semi-structured...") vẫn ở slide "2000S" vì là phần tiếp của câu 83 s.
+
 ## Câu hỏi tự kiểm tra
 
 | Câu hỏi | Test kiểm tra |
@@ -496,4 +551,9 @@ slide 91s (12 box)
 | Vì sao `raw_payload` giữ cả box bị lọc? | `test_raw_payload_keeps_dropped_boxes` |
 | Ảnh keyframe hỏng thì sao? Các slide khác có mất không? | `test_corrupt_keyframe_goes_to_dlq`, `test_error_entry_becomes_dlq_row_and_good_slides_survive` |
 | Chạy frame lane có xóa dữ liệu audio không? | `test_frame_write_keeps_audio_rows` |
-| Có dòng `nearest` trong `aligned` nghĩa là gì? | (roadmap #5) |
+| Có dòng `nearest` trong `aligned` nghĩa là gì? | `test_segment_in_a_gap_goes_to_the_nearest_slide`, `test_nearest_row_is_a_weak_match` |
+| Hai khoảng chỉ chạm biên có tính là chồng không? | `test_touching_intervals_do_not_overlap` |
+| Câu vắt qua 2 slide chọn slide nào? Hòa thì sao? | `test_crossing_segment_takes_the_bigger_overlap`, `test_tie_goes_to_the_later_slide`, `test_nearest_tie_goes_to_the_later_slide` |
+| Có câu nào biến mất khi ghép không? | `test_every_ok_segment_is_aligned`, `test_each_segment_appears_once` |
+| Slide quarantine có bị bỏ khi ghép không? | `test_slide_quality_flag_is_carried_not_filtered` |
+| Frame lane chạy lại thì `aligned` cũ ra sao? | `test_aligned_rows_are_written_and_replaced` |
